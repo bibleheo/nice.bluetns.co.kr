@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import os
 from datetime import datetime
+from .timeutil import now_seoul
 
 CHECKPOINT_SUFFIX = ".progress.json"
 
@@ -73,7 +74,7 @@ def build_state(processed_keys: list[str], records: list[dict],
                 unfound: list[dict], ambiguous: list[dict],
                 total: int, finance_years: int) -> dict:
     return {
-        "saved_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "saved_at": now_seoul().strftime("%Y-%m-%d %H:%M:%S"),
         "total": total,
         "finance_years": finance_years,
         "processed_keys": processed_keys,

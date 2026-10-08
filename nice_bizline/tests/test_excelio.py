@@ -37,6 +37,51 @@ class TestReader:
         assert rows[0]["사업자번호"] == "1234567890"
         assert rows[0]["대표자명"] == "홍길동"
 
+    def test_upche_myeong_alias(self, tmp_path):
+        """'업체명' 도 회사명으로 인식."""
+        p = tmp_path / "in.xlsx"
+        _make_input(p, [
+            ["업체명", "사업자번호"],
+            ["가나건설", "1112233445"],
+        ])
+        rows = read_company_list(str(p))
+        assert rows[0]["회사명"] == "가나건설"
+        assert rows[0]["사업자번호"] == "1112233445"
+
+    def test_address_column_captured(self, tmp_path):
+        """'주소'(및 alias '소재지') 컬럼을 캡처해 매칭에 활용."""
+        p = tmp_path / "in.xlsx"
+        _make_input(p, [
+            ["회사명", "소재지"],
+            ["한빛엔지니어링", "서울특별시 강남구 테헤란로 1"],
+        ])
+        rows = read_company_list(str(p))
+        assert rows[0]["회사명"] == "한빛엔지니어링"
+        assert rows[0]["주소"] == "서울특별시 강남구 테헤란로 1"
+
+    def test_gogaeksa_alias(self, tmp_path):
+        """'고객사' 헤더도 회사명으로 인식."""
+        p = tmp_path / "in.xlsx"
+        _make_input(p, [
+            ["고객사", "연락처", "주소"],
+            ["현대모비스(주)", "041-599-9812", "경기도 평택시 포승읍"],
+        ])
+        rows = read_company_list(str(p))
+        assert rows[0]["회사명"] == "현대모비스(주)"
+        assert rows[0]["주소"] == "경기도 평택시 포승읍"
+        assert rows[0]["전화번호"] == "041-599-9812"
+
+    def test_fallback_keeps_other_matched_columns(self, tmp_path):
+        """회사명 헤더만 인식 실패해도 주소 등 다른 컬럼은 보존."""
+        p = tmp_path / "in.xlsx"
+        _make_input(p, [
+            ["알수없는헤더", "주소"],
+            ["가나건설", "서울 강남구"],
+        ])
+        rows = read_company_list(str(p))
+        assert rows[0]["회사명"] == "가나건설"
+        assert rows[0]["주소"] == "서울 강남구"
+
     def test_no_header_falls_back_to_first_column(self, tmp_path):
         """헤더 인식 실패 시 1열을 회사명으로 처리."""
         p = tmp_path / "in.xlsx"
@@ -62,6 +107,70 @@ class TestReader:
         ])
         rows = read_company_list(str(p))
         assert [r["회사명"] for r in rows] == ["A", "B"]
+
+
+class TestWriterInputColumns:
+    def test_input_columns_left_and_show_once(self, tmp_path):
+        """왼쪽에 [입력] 열, 동명 여러 건이면 입력값은 첫 행에만 표시."""
+        p = tmp_path / "out.xlsx"
+        inp = {"회사명": "동명건설", "주소": "서울"}
+        write_results(
+            str(p),
+            records=[
+                {"회사명": "동명건설(주)", "사업자번호": "111", "조회상태": "성공",
+                 "_input": inp, "_input_show": True},
+                {"회사명": "동명건설(주)", "사업자번호": "222", "조회상태": "성공",
+                 "_input": inp, "_input_show": False},
+            ],
+            unfound=[], ambiguous=[], summary={},
+        )
+        wb = openpyxl.load_workbook(p)
+        ws = wb["결과"]
+        headers = [ws.cell(1, c).value for c in range(1, ws.max_column + 1)]
+        assert headers[0] == "[입력] 회사명"
+        assert headers[1] == "[입력] 주소"
+        assert "회사명" in headers  # 결과 열도 존재
+        # 첫 행엔 입력값, 둘째 행(동명 2번째)은 빈 칸
+        assert ws.cell(2, 1).value == "동명건설"
+        assert ws.cell(3, 1).value in (None, "")
+        # 결과 열은 두 행 모두 채워짐
+        name_col = headers.index("회사명") + 1
+        assert ws.cell(2, name_col).value == "동명건설(주)"
+        assert ws.cell(3, name_col).value == "동명건설(주)"
+
+
+class TestResultSheetFiltering:
+    def test_closed_and_unfound_rows_excluded_from_results(self, tmp_path):
+        """결과 시트에는 성공(정상)만: 폐업자/휴업자·미발견·확인필요 제외.
+
+        휴폐업 제외분은 미발견·오류 시트에 '제외' 사유로 남긴다.
+        """
+        p = tmp_path / "out.xlsx"
+        write_results(
+            str(p),
+            records=[
+                {"회사명": "정상사", "휴폐업정보": "일반과세자", "조회상태": "성공"},
+                {"회사명": "폐업사", "휴폐업정보": "폐업자", "조회상태": "성공"},
+                {"회사명": "휴업사", "휴폐업정보": "휴업자", "조회상태": "성공"},
+                {"회사명": "못찾은사", "조회상태": "미발견"},
+                {"회사명": "애매한사", "조회상태": "확인필요"},
+            ],
+            unfound=[{"회사명": "못찾은사", "조회상태": "미발견", "사유": "검색 0건"}],
+            ambiguous=[], summary={},
+        )
+        wb = openpyxl.load_workbook(p)
+        ws = wb["결과"]
+        headers = [ws.cell(1, c).value for c in range(1, ws.max_column + 1)]
+        name_col = headers.index("회사명") + 1
+        names = [ws.cell(r, name_col).value for r in range(2, ws.max_row + 1)]
+        assert names == ["정상사"]          # 결과 시트엔 정상만
+        # 휴폐업 제외분은 미발견·오류 시트에 '제외'로 기록
+        ws2 = wb["미발견·오류"]
+        rows2 = [tuple(ws2.cell(r, c).value for c in (1, 2))
+                 for r in range(2, ws2.max_row + 1)]
+        assert ("폐업사", "제외") in rows2
+        assert ("휴업사", "제외") in rows2
+        assert ("못찾은사", "미발견") in rows2
 
 
 class TestWriter:

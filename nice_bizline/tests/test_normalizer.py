@@ -1,9 +1,35 @@
 from nice_bizline.app.core.normalizer import (
+    amount_to_millions,
     normalize_amount,
     normalize_biz_number,
     normalize_date,
     normalize_record,
 )
+
+
+class TestAmountToMillions:
+    def test_eok_won(self):
+        assert amount_to_millions("20.4", "억원") == 2040
+        assert amount_to_millions("11.4", "억원") == 1140
+
+    def test_man_won(self):
+        assert amount_to_millions("1,558.3", "만원") == 16
+
+    def test_dash_and_none(self):
+        assert amount_to_millions("-", "억원") is None
+        assert amount_to_millions(None, "억원") is None
+        assert amount_to_millions("", "만원") is None
+
+    def test_negative(self):
+        assert amount_to_millions("-2,239.2", "만원") == -22
+
+    def test_other_units(self):
+        assert amount_to_millions("5", "조원") == 5_000_000
+        assert amount_to_millions("300", "백만원") == 300
+        assert amount_to_millions("1000000", "원") == 1
+
+    def test_unknown_unit_rounds_value(self):
+        assert amount_to_millions("123.6", "") == 124
 
 
 class TestNormalizeAmount:

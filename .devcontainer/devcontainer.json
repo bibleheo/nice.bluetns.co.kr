@@ -1,0 +1,19 @@
+{
+  "name": "nice-bizline-app",
+  "image": "mcr.microsoft.com/devcontainers/python:3.12",
+  "postCreateCommand": "bash .devcontainer/postCreate.sh",
+  "forwardPorts": [8501],
+  "portsAttributes": {
+    "8501": {
+      "label": "streamlit",
+      "onAutoForward": "openBrowser"
+    }
+  },
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "python.terminal.activateEnvironment": false
+      }
+    }
+  }
+}

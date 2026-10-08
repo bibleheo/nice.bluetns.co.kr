@@ -118,3 +118,40 @@ python -m playwright codegen https://www.nicebizinfo.com
 - 사이트가 "천원 단위" → `÷ 1_000`
 
 확인 방법: 알려진 회사(예: 삼성전자)의 매출액을 사이트와 결과 엑셀에서 비교.
+
+---
+
+## 6. 실사이트(nicebizline.com) 반영 현황 — 2026-07
+
+실제 사이트를 확인해 셀렉터를 채운 상태입니다. **사이트는 `www.nicebizline.com`
+(Vue/Vuetify SPA)** 이며, 다음이 반영됨:
+
+| 구분 | 값/방식 |
+|------|---------|
+| 로그인 | `/cm/lgn`, id=`input[type=text]`, pw=`input[type=password]`, 버튼=`button:has-text('로그인')`, 성공판정=`img[alt='나의정보']` |
+| 검색 | `#search` 입력 → `img[alt='검색하기']` 클릭. 결과는 `v-data-table` |
+| 결과 필드 | td 클래스가 무의미 → **열 위치(nth-child)**로 지정 (2 기업명/3 사업자번호/4 대표자/5 소재지) |
+| 상세 진입 | **href 없음** → 행의 '개요' 버튼 클릭 시 **같은 페이지 인라인 렌더** |
+| 상세 파싱 | 기본정보 `th(라벨)→td(값)`, 재무 KPI 카드 `.section__info__label/value` |
+| 재무 단위 | **억원/만원 혼재** → `normalizer.amount_to_millions()`로 백만원 통일. 최신 결산 1개년만 기록 |
+| 노이즈 | 사업자번호 없는 펀드/ETF 행 제외 |
+| 동명 회사 | 사업자번호 미입력 시 상호 정확 일치 회사를 **전부 수집(여러 행)** |
+
+### ⚠️ 실행으로 검증 필요한 동적 동작
+코드는 제공된 실제 DOM 기준으로 작성했으나, 아래는 **로그인 후 시범 실행**으로만 확정됩니다.
+
+1. **검색 URL 토큰** — `site.search_url`의 `/workspace/FD100/z6pi` 끝부분이 세션마다
+   바뀌면 접근 실패 가능. 이를 대비해 collector는 *현재 페이지에 `#search`가 있으면
+   그대로 사용하고, 없을 때만 search_url→base_url 순으로 이동*하도록 되어 있음.
+2. **검색 실행** — 아이콘 클릭으로 결과가 뜨는지(안 되면 Enter 폴백).
+3. **개요 클릭 후 렌더** — `.kpi__info`(재무 카드)가 나타날 때까지 대기하도록 구현됨.
+
+### 시범 실행 방법 (헤드리스 끄고 눈으로 확인 권장)
+
+```bash
+python -m pip install -r requirements.txt
+python -m playwright install chromium
+```
+
+`config.yaml`에서 `browser.headless: false`로 바꾼 뒤, 실제 ID/PW로 5건 정도
+소량 실행 → 로그에서 막히는 지점을 확인하고 위 1~3을 조정.

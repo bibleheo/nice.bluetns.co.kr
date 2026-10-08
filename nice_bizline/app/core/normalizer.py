@@ -26,6 +26,38 @@ def normalize_amount(value) -> int | None:
         return None
 
 
+# 나이스비즈라인 상세 KPI는 값마다 단위(억원/만원 등)가 달라 → 백만원으로 통일.
+_UNIT_TO_MILLION = {
+    "조원": 1_000_000, "조": 1_000_000,
+    "억원": 100, "억": 100,
+    "백만원": 1, "백만": 1,
+    "만원": 0.01, "만": 0.01,
+    "천원": 0.001, "천": 0.001,
+    "원": 0.000001,
+}
+
+
+def amount_to_millions(number, unit) -> int | None:
+    """표시값 + 단위를 백만원 정수로 변환.
+
+    예: (20.4, "억원") -> 2040, (1558.3, "만원") -> 16, ("-", "억원") -> None
+    단위를 모르면 값 자체를 반올림해 반환(이미 백만원으로 간주).
+    """
+    if number is None:
+        return None
+    s = str(number).strip().replace(",", "")
+    if s in ("", "-"):
+        return None
+    try:
+        val = float(s)
+    except ValueError:
+        return None
+    factor = _UNIT_TO_MILLION.get((unit or "").strip())
+    if factor is None:
+        return round(val)
+    return round(val * factor)
+
+
 def normalize_date(value) -> str | None:
     """날짜를 YYYY-MM-DD로 통일."""
     if value is None or value == "":

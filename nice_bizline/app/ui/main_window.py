@@ -9,6 +9,7 @@ import os
 import sys
 import tkinter as tk
 from datetime import datetime
+from nice_bizline.app.core.timeutil import now_seoul
 from tkinter import filedialog, messagebox, ttk
 
 from ..core import checkpoint, credentials, file_logger
@@ -91,12 +92,11 @@ class MainWindow(tk.Tk):
         # ③ 옵션
         grp3 = ttk.LabelFrame(body, text=" ③ 옵션 ", padding=8)
         grp3.pack(fill="x", pady=4)
+        # 실사이트는 최신 결산 1개년만 제공 → 1개년 고정
         tk.Label(grp3, text="재무 범위:", bg=BG).grid(row=0, column=0, sticky="w")
         self._years_var = tk.IntVar(value=1)
-        ttk.Radiobutton(grp3, text="최근 1개년", variable=self._years_var, value=1).grid(
-            row=0, column=1, padx=8)
-        ttk.Radiobutton(grp3, text="최근 3개년", variable=self._years_var, value=3).grid(
-            row=0, column=2, padx=8)
+        tk.Label(grp3, text="최신 결산 1개년 (사이트 제공 기준)", bg=BG).grid(
+            row=0, column=1, padx=8, sticky="w")
 
         # 실행 컨트롤
         ctrl = tk.Frame(body, bg=BG)
@@ -294,7 +294,7 @@ class MainWindow(tk.Tk):
         self.after(0, self._on_worker_done, summary)
 
     def _append_log(self, level: str, msg: str) -> None:
-        ts = datetime.now().strftime("%H:%M:%S")
+        ts = now_seoul().strftime("%H:%M:%S")
         self._log.configure(state="normal")
         self._log.insert("end", f"{ts}  {msg}\n", level)
         self._log.see("end")
@@ -322,7 +322,7 @@ class MainWindow(tk.Tk):
 
         # 결과 저장
         base, _ = os.path.splitext(self._input_path)
-        out = f"{base}_나이스비즈라인결과_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
+        out = f"{base}_나이스비즈라인결과_{now_seoul().strftime('%Y%m%d_%H%M')}.xlsx"
         try:
             write_results(
                 out,

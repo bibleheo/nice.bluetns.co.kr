@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import os
 from datetime import datetime
+from .timeutil import now_seoul
 
 
 _LEVEL_MAP = {
@@ -21,7 +22,7 @@ def setup_run_logger(input_path: str, level: int = logging.INFO) -> tuple[loggin
     반환: (logger, 로그파일 경로)
     """
     base, _ = os.path.splitext(input_path)
-    ts = datetime.now().strftime("%Y%m%d_%H%M")
+    ts = now_seoul().strftime("%Y%m%d_%H%M")
     log_path = f"{base}_나이스비즈라인로그_{ts}.log"
 
     logger = logging.getLogger(f"nice_bizline.run.{ts}")

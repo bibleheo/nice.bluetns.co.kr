@@ -33,6 +33,9 @@ streamlit run nice_bizline/app/web/streamlit_app.py
 
 → 브라우저에 http://localhost:8501 자동 열림
 
+**Windows 사용자**: 명령어 입력 없이 저장소 루트의 **`웹앱_실행.bat`** 파일을
+더블클릭하면 패키지 설치와 웹앱 실행이 자동으로 진행됩니다. (Python 3.11 설치 필요)
+
 ### 방법 C: 데스크톱 앱
 
 ```bash

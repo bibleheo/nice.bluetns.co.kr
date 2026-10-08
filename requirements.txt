@@ -1,9 +1,4 @@
-requests
 openpyxl
-pandas
-beautifulsoup4
-lxml
-python-dotenv
 playwright
 PyYAML
 keyring

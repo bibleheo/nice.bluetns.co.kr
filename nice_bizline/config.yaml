@@ -3,56 +3,73 @@
 # - 실제 페이지를 확인한 뒤 TODO 표시된 셀렉터를 채워야 동작합니다.
 
 site:
-  base_url: "https://www.nicebizinfo.com"
-  login_url: "https://www.nicebizinfo.com/login"      # TODO: 실제 로그인 URL 확인
-  search_url: "https://www.nicebizinfo.com/search"    # TODO: 실제 검색 URL 확인
+  base_url: "https://www.nicebizline.com"
+  login_url: "https://www.nicebizline.com/cm/lgn"     # 실측
+  # ⚠️ 경로 끝 'z6pi'가 세션/검색별 동적 토큰일 수 있음 → 실행 시 검증 필요
+  search_url: "https://www.nicebizline.com/workspace/FD100/z6pi"    # 실측(동적 가능성)
 
 # 페이지별 CSS/XPath 셀렉터
+# ⚠️ 이 사이트는 Vue.js(Vuetify) SPA. input의 id(input-1271 등)는 매 렌더마다
+#    자동 생성되어 불안정하므로 type/구조 기반 셀렉터를 사용한다.
 selectors:
   login:
-    id_input: "input[name='userId']"        # TODO
-    pw_input: "input[name='password']"      # TODO
-    submit_btn: "button[type='submit']"     # TODO
-    logged_in_marker: ".user-name"          # 로그인 성공 시 노출되는 요소  # TODO
+    id_input: "input[type='text']"          # 실측: Vuetify 자동 id 대신 type으로 고정
+    pw_input: "input[type='password']"      # 실측
+    submit_btn: "button:has-text('로그인')"   # 실측: v-btn 안의 '로그인' 텍스트
+    logged_in_marker: "img[alt='나의정보']"   # 실측: 로그인 후 상단 GNB에 항상 노출되는 나의정보 아이콘
   search:
-    query_input: "input[name='q']"          # TODO
-    submit_btn: "button.search-btn"         # TODO
-    result_rows: "table.result-list tr"     # 후보 1건 = 행 1개  # TODO
-    result_company_name: "td.name a"        # TODO
-    result_biz_no: "td.biz-no"              # TODO
-    result_ceo: "td.ceo"                    # TODO
-    result_address: "td.addr"               # TODO
-    result_link: "td.name a"                # 상세로 이동하는 링크  # TODO
-    # 다음 페이지 이동: a/button 셀렉터. 빈 문자열이면 페이지네이션 비활성(1페이지만)
-    next_page_btn: ""                       # TODO (예: "a.btn-next:not(.disabled)")
+    query_input: "#search"                  # 실측: 고정 id
+    submit_btn: "img[alt='검색하기']"         # 실측: 검색 아이콘
+    # ⚠️ 이 표(v-data-table)의 td 클래스명은 내용과 무관(td--date에 사업자번호 등).
+    #    따라서 열 위치(nth-child)로 지정한다. 헤더 순서:
+    #    1 기업유형 / 2 기업명 / 3 사업자번호 / 4 대표자명 / 5 소재지 / 6 산업명 / 7 바로가기
+    # ⚠️ 반드시 '기업 검색 결과' 캡션이 붙은 표만 읽는다.
+    #    (상세 화면의 재무제표 표도 같은 v-data-table 구조라 오인 방지)
+    result_rows: "table:has(caption:text('기업 검색 결과')) tbody tr"
+    result_type: "td:nth-child(1)"          # 기업 유형 배지(상장/외감/일반/개인/폐업)
+    result_company_name: "td:nth-child(2)"  # 기업명 (버튼 텍스트)
+    result_biz_no: "td:nth-child(3)"        # 사업자번호
+    result_ceo: "td:nth-child(4)"           # 대표자명
+    result_address: "td:nth-child(5)"       # 기업 소재지
+    result_industry: "td:nth-child(6)"      # 산업명(업종)
+    # 상세 진입: 기업명 버튼 클릭(같은 페이지에 요약 렌더 - 사용자 확인).
+    # '개요' 버튼은 새 탭/다른 동작 가능성이 있어 기업명 클릭을 기본으로 사용.
+    result_detail_btn: "td:nth-child(2) button"
+    result_link: ""                         # (구) href 방식 미사용
+    next_page_btn: "button[aria-label='다음 페이지']:not(.v-btn--disabled)"  # 실측
+  # 상세(개요)는 검색 결과에서 '개요' 클릭 시 같은 페이지에 인라인 렌더된다(SPA).
+  # 기본정보는 'th(라벨) → 다음 td(값)' 구조라 라벨 텍스트로 값을 찾는다.
+  # 재무는 최신 결산 1개년 KPI 카드에서 값+단위(억원/만원 등)를 읽어 백만원으로 변환.
   detail:
-    company_name: ".info-company-name"      # TODO
-    ceo: ".info-ceo"                        # TODO
-    biz_no: ".info-bizno"                   # TODO
-    address: ".info-address"                # TODO
-    industry: ".info-industry"              # TODO
-    founded: ".info-founded"                # TODO
-    phone: ".info-phone"                    # TODO
-    employees: ".info-employees"            # TODO
-    sales: ".finance-sales"                 # TODO (단년)
-    operating_profit: ".finance-op"         # TODO (단년)
-    net_income: ".finance-net"              # TODO (단년)
-    credit_rating: ".credit-rating"         # TODO
-    # 다년 재무표 (3개년 옵션에서 사용). 1개 row = 1개 연도
-    financial_table:
-      rows: ".finance-table tbody tr"       # TODO
-      year: "td.year"                       # TODO (예: "2025")
-      sales: "td.sales"                     # TODO
-      operating_profit: "td.op"             # TODO
-      net_income: "td.net"                  # TODO
+    # 상세 렌더 완료 판정: 기본정보 라벨(.ci__item__label) 또는 라벨 th(scope=row)
+    ready_marker: ".ci__item__label, th[scope='row']"
+    settlement_text: "결산 일자"             # 결산일자 표기 텍스트(앞부분)
+    # 기본정보 표에서 뽑을 라벨(th 텍스트). 값은 바로 다음 td.
+    label_ceo: "대표자명"
+    label_employees: "종업원 수"
+    label_founded: "설립일자"
+    label_industry: "표준산업분류"           # '표준산업분류(11차)' 를 부분일치로 매칭
+    # 본사 주소: td 안 밑줄 버튼 텍스트(도로/지번/지도 버튼 텍스트는 제외)
+    address_value: ".content__inner .btn--underline .btn__content"
+    # 재무 KPI 카드 (자산/부채/자본/매출액/영업이익/당기순이익)
+    finance_card: ".nbl--section__info.kpi__info"
+    finance_label: ".section__info__label"
+    finance_value: ".section__info__value.point"
+    finance_symbol: ".symbol"
+  session:
+    # 세션 연장 버튼(클릭 시 10분 연장). 재로그인 대신 9분마다 이 버튼을 누른다.
+    extend_btn: "button:has-text('로그인 연장')"
+    # 동시접속 제한(1명) 팝업: 아래 버튼 텍스트를 순서대로 눌러 기존 접속 강제 종료
+    disconnect_steps: ["접속 종료", "예", "확인"]
+
   login_page_markers:
     # 세션 만료로 로그인 페이지로 튕긴 경우 감지에 사용
-    url_contains: "/login"
-    dom_marker: "input[name='password']"
+    url_contains: "/cm/lgn"                 # 실측: 세션 만료 시 이 경로로 튕김
+    dom_marker: "input[type='password']"    # 로그인 페이지에만 있는 비밀번호 입력칸
 
 timing:
   session_minutes: 10           # 절대시간 만료
-  relogin_threshold_minutes: 9  # 9분 경과 시 선제 재로그인
+  relogin_threshold_minutes: 9  # 9분마다 '로그인 연장' 클릭(실패 시 재로그인 폴백)
   request_delay_min_sec: 1.0
   request_delay_max_sec: 3.0
   page_timeout_sec: 30

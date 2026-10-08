@@ -24,6 +24,8 @@ class RunOptions:
     input_path: str = ""
     resume: bool = False
     checkpoint_every: int = 10
+    narrow_fields: list | None = None
+    result_filter: dict | None = None
 
 
 @dataclass
@@ -59,6 +61,8 @@ class Worker(threading.Thread):
             input_path=self._opts.input_path,
             resume=self._opts.resume,
             checkpoint_every=self._opts.checkpoint_every,
+            narrow_fields=self._opts.narrow_fields,
+            result_filter=self._opts.result_filter,
         )
         pstate = PipelineState()
 

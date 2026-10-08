@@ -86,10 +86,11 @@ def test_worker_writes_multi_year_columns(tmp_path):
     # 단년 헤더는 없어야 함
     assert "매출액(백만원)" not in headers
 
-    # 값 검증: 삼성전자 2025 매출액
+    # 값 검증: 삼성전자 2025 매출액 (결과 회사명 컬럼은 [입력] 열들 뒤)
+    name_col = headers.index("회사명") + 1
     samsung_row = None
     for r in range(2, ws.max_row + 1):
-        if ws.cell(r, 1).value == "삼성전자(주)":
+        if ws.cell(r, name_col).value == "삼성전자(주)":
             samsung_row = r
             break
     assert samsung_row is not None
