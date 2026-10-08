@@ -60,6 +60,12 @@ def main():
     _init_session()
     cfg = _load_config()
 
+    # 서버 모드(nice-web): 수집은 nice-worker 가 하고, 이 화면은 작업 등록·조회만.
+    if os.environ.get("SERVER_MODE") == "1":
+        from nice_bizline.app.web.server_ui import render as render_server
+        render_server(cfg)
+        return
+
     st.title("나이스비즈라인 기업정보 조회 자동화")
     st.caption("웹 UI 버전 - Codespaces 지원. 데스크톱 앱과 동일한 파이프라인.")
 

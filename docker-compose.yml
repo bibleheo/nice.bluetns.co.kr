@@ -1,0 +1,68 @@
+# 포털(bluetns) 편입 계약 준수:
+#  - 서비스 이름은 nice- 접두사 (web/app/worker 같은 일반 이름 금지)
+#  - portal-net 에는 nice-web 하나만 붙인다. worker 는 자기 망(default)만.
+#  - ports: 를 열지 않는다 (게이트웨이가 portal-net 으로 nice-web:8501 에 접속)
+#  - 비밀값(NICE_ID/NICE_PW)은 .env(env_file) 로 nice-worker 에만 주입
+services:
+  nice-web:
+    build: .
+    image: nice-bizline:latest
+    command: ["python", "-m", "streamlit", "run", "nice_bizline/app/web/streamlit_app.py",
+              "--server.port=8501", "--server.address=0.0.0.0"]
+    environment:
+      SERVER_MODE: "1"
+      DATA_DIR: /data
+      TZ: Asia/Seoul
+      STREAMLIT_SERVER_HEADLESS: "true"
+      STREAMLIT_SERVER_ENABLE_XSRF_PROTECTION: "true"
+      STREAMLIT_SERVER_ENABLE_CORS: "false"
+      STREAMLIT_SERVER_WEBSOCKET_PING_INTERVAL: "30"   # 게이트웨이 유휴 끊김(900초)보다 짧게
+      STREAMLIT_SERVER_MAX_UPLOAD_SIZE: "25"            # MB
+      STREAMLIT_BROWSER_GATHER_USAGE_STATS: "false"
+    volumes:
+      - nice-data:/data
+    networks:
+      - default
+      - portal-net
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8501/_stcore/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+  nice-worker:
+    build: .
+    image: nice-bizline:latest
+    command: ["python", "-m", "nice_bizline.app.server.worker"]
+    env_file: .env                     # NICE_ID / NICE_PW
+    environment:
+      DATA_DIR: /data
+      TZ: Asia/Seoul
+      RETENTION_DAYS: "30"             # 업로드·결과 보관 일수
+      DEBUG_RETENTION_DAYS: "7"        # 실패 스크린샷 보관 일수
+      POLL_SEC: "5"
+    volumes:
+      - nice-data:/data
+    networks:
+      - default                        # 밖(NICE 사이트)으로는 이 망으로 나간다
+    shm_size: "1gb"                    # Chromium 은 /dev/shm 이 작으면 죽는다
+    mem_limit: 2g                      # 1,000건 시험 후 실측 조정
+    cpus: 1.0
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+volumes:
+  nice-data:
+
+networks:
+  portal-net:
+    external: true
+    name: bluetns-portal_portal-net

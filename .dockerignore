@@ -1,0 +1,16 @@
+.git
+.github
+.venv
+venv
+__pycache__
+*.pyc
+.pytest_cache
+debug/
+*.progress.json
+*_결과*.xlsx
+*_나이스비즈라인결과_*.xlsx
+.env
+.devcontainer
+*.bat
+*.md
+!README.md
