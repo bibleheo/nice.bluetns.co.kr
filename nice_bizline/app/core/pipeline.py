@@ -65,6 +65,7 @@ def run_pipeline(collector, cfg: dict, opts: PipelineOptions,
     weights = cfg.get("matching", {})
 
     # 재개
+    resumed_pending = False
     if opts.resume and opts.input_path:
         loaded = checkpoint.load(opts.input_path)
         if loaded:
@@ -73,6 +74,7 @@ def run_pipeline(collector, cfg: dict, opts: PipelineOptions,
             state.ambiguous = list(loaded.get("ambiguous", []))
             state.processed_keys = set(loaded.get("processed_keys", []))
             yield _log("info", f"체크포인트 로드 - 이미 처리된 {len(state.processed_keys)}건 스킵")
+            resumed_pending = len(state.processed_keys) > 0   # 첫 재개 지점을 로그로 남기기 위함
 
     # 로그인
     try:
@@ -114,6 +116,11 @@ def run_pipeline(collector, cfg: dict, opts: PipelineOptions,
             continue
 
         seen_this_run.add(key)
+        if resumed_pending:
+            # 재배포/재시작 후 실제로 이어서 처리하는 첫 건 — 재개 검증 근거
+            yield _log("info", f"재개 시작: {i}번째 '{name}' 부터 이어서 처리 "
+                               f"(이전 처리 {len(state.processed_keys)}건)")
+            resumed_pending = False
         yield {"type": "progress", "current": i, "total": total, "name": name}
 
         # 세션 유지: 우선 '로그인 연장' 버튼 클릭, 안 되면 재로그인으로 폴백
@@ -178,6 +185,21 @@ def run_pipeline(collector, cfg: dict, opts: PipelineOptions,
                 finance_years=opts.finance_years,
             )):
                 yield _log("info", f"체크포인트 저장 ({len(state.processed_keys)}건)")
+
+    # 처리 검증: 누락(미처리)·중복(같은 입력에 같은 사업자번호가 두 번) 집계 — 재개 검증 근거
+    unprocessed = [q for q in opts.companies if _key_for(q) not in state.processed_keys]
+    seen_pairs: set = set()
+    dup = 0
+    for r in state.records:
+        if r.get("조회상태") != "성공":
+            continue
+        pair = ((r.get("_input") or {}).get("회사명"), r.get("사업자번호"))
+        if pair in seen_pairs:
+            dup += 1
+        seen_pairs.add(pair)
+    yield _log("info",
+               f"처리 확인: 입력 {total}건 / 처리 {total - len(unprocessed)}건 / "
+               f"미처리 {len(unprocessed)}건 / 결과 {len(state.records)}행 / 중복 {dup}행")
 
     _finalize(state, opts, session, stopped=stopped, collector=collector)
     yield {"type": "done", "state": state}
