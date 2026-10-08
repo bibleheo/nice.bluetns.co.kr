@@ -92,6 +92,12 @@ def run_job(store: J.JobStore, job: dict, cfg: dict, collector=None) -> str:
     state = PipelineState()
     say("info", f"작업 시작 - {len(companies)}건, 소유자 {job.get('owner_email', '')}")
 
+    # 컨테이너 stdout(docker compose logs)에도 운영자가 볼 핵심 이벤트를 남긴다.
+    # 계정 ID·비밀번호는 어떤 메시지에도 포함되지 않는다.
+    _STDOUT_MARKERS = ("로그인 성공", "자동 재로그인", "재로그인 실패", "세션 연장",
+                       "재개 시작", "체크포인트 로드", "처리 확인", "안전 정지", "사용자 중단")
+    progress_every = _env_int("LOG_EVERY", 10)
+    tag = f"[{job_id}]"
     last_progress_save = 0.0
     try:
         for ev in run_pipeline(collector, cfg, opts, state,
@@ -99,11 +105,21 @@ def run_job(store: J.JobStore, job: dict, cfg: dict, collector=None) -> str:
             t = ev.get("type")
             if t == "log":
                 say(ev["level"], ev["message"])
+                msg = ev["message"]
+                if ev["level"] == "error" or any(m in msg for m in _STDOUT_MARKERS):
+                    (log.error if ev["level"] == "error" else log.info)("%s %s", tag, msg)
             elif t == "progress":
+                cur, total = ev["current"], ev["total"]
                 # job.json 갱신은 2초에 한 번으로 제한 (디스크 부담 완화)
                 if time.time() - last_progress_save > 2:
-                    store.update_progress(job_id, ev["current"], ev["total"], ev["name"])
+                    store.update_progress(job_id, cur, total, ev["name"])
                     last_progress_save = time.time()
+                # N건마다 진행 상황을 stdout 에 요약
+                if progress_every and cur % progress_every == 0:
+                    c = _live_counts(state)
+                    log.info("%s 진행 %d/%d  성공 %d · 미발견 %d · 확인필요 %d · 오류 %d · 필터제외 %d",
+                             tag, cur, total, c["성공"], c["미발견"], c["확인필요"], c["오류"],
+                             state.summary.get("필터제외", 0))
     except Exception as e:
         say("error", f"예상치 못한 오류: {e}")
         store.append_log(job_id, traceback.format_exc())
@@ -134,6 +150,16 @@ def run_job(store: J.JobStore, job: dict, cfg: dict, collector=None) -> str:
     say("info", f"작업 종료 - 상태 {status}, 요약 {counts}")
     store.finish(job_id, status, counts=counts)
     return status
+
+
+def _live_counts(state: PipelineState) -> dict:
+    """진행 중 상태 집계 (stdout 진행 로그용)."""
+    c = {"성공": 0, "미발견": 0, "확인필요": 0, "오류": 0}
+    for r in state.records:
+        s = r.get("조회상태")
+        if s in c:
+            c[s] += 1
+    return c
 
 
 def cleanup(store: J.JobStore) -> None:
