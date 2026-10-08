@@ -48,7 +48,7 @@ ssh-keygen -t ed25519 -C "nice-deploy@github-actions" -f nice_deploy
 | Secret | 값 |
 |--------|----|
 | `DEPLOY_SSH_KEY` | 1-1 개인키 파일 내용 전체 |
-| `DEPLOY_KNOWN_HOSTS` | 1-2 호스트 키 한 줄 |
+| `DEPLOY_KNOWN_HOSTS` | (선택) 호스트 키 한 줄. 비워 두면 Actions 러너가 직접 받아 지문(`SHA256:Zm5a…`)과 대조 — Windows 구형 OpenSSH 의 KEX 오류 우회 |
 | `DEPLOY_HOST` | 서버 주소 |
 | `DEPLOY_USER` | 배포 계정 (예: `nice`) |
 | `NICE_ID` | 나이스비즈라인 서버 전용 계정 ID |

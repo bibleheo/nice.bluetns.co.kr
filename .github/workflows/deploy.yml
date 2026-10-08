@@ -32,13 +32,32 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: SSH 키·호스트 키 설정
+      - name: SSH 키·호스트 키 설정 (지문 대조)
+        env:
+          KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          HOST: ${{ secrets.DEPLOY_HOST }}
+          # 포털 팀이 전달한 서버 호스트 키 지문. 바뀌면 Variables 로 덮어쓴다.
+          EXPECTED_FP: ${{ vars.DEPLOY_HOST_FINGERPRINT || 'SHA256:Zm5aAv5DJ/EnKiObKSadOxA5nKuXgToCGhNiyhVhAjY' }}
         run: |
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
           printf '%s\n' "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          printf '%s\n' "${{ secrets.DEPLOY_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+          if [ -n "$KNOWN_HOSTS" ]; then
+            printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            # Secret 이 없으면 러너가 직접 받는다 (Windows 구형 OpenSSH 의 KEX 오류 우회)
+            ssh-keyscan -t ed25519 "$HOST" > ~/.ssh/known_hosts 2>/dev/null
+          fi
           chmod 644 ~/.ssh/known_hosts
+          fp=$(ssh-keygen -lf ~/.ssh/known_hosts | awk '{print $2}')
+          echo "서버 호스트 키 지문: $fp"
+          if [ "$fp" != "$EXPECTED_FP" ]; then
+            echo "::error::호스트 키 지문 불일치 (기대: $EXPECTED_FP). 중간자 공격 또는 서버 정보 오류 — 배포 중단"
+            exit 1
+          fi
+          echo "지문 일치 — known_hosts 고정 완료"
+          echo "known_hosts 한 줄 (DEPLOY_KNOWN_HOSTS Secret 으로 넣어도 됨):"
+          cat ~/.ssh/known_hosts
 
       - name: 서버 접속 확인
         run: ssh $SSH_OPTS "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" "echo ok && docker compose version"
