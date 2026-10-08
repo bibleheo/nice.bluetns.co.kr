@@ -137,3 +137,27 @@ docker compose -f docker-compose.yml up --build
 # nice-web 에 ports: ["8501:8501"], environment DEV_FAKE_EMAIL=me@test 를 임시로 추가.
 # (운영 compose 에는 절대 넣지 않는다)
 ```
+
+---
+
+## 7. 시험 근거 수집 명령 (포털 회신용)
+
+**재개 검증** — worker 로그에 자동으로 찍힘 (작업 목록의 로그 또는 `docker compose logs nice-worker`):
+- 재배포 직전 처리 건수: 작업 목록 진행률 `N/총건수`
+- 재개 후: `체크포인트 로드 - 이미 처리된 N건 스킵` → `재개 시작: M번째 '회사명' 부터 이어서 처리`
+- 종료 시: `처리 확인: 입력 X건 / 처리 X건 / 미처리 0건 / 결과 Y행 / 중복 0행`
+  (체크포인트는 10건마다 저장되므로 마지막 저장 이후 최대 9건은 다시 처리되지만, 기록은 저장분부터라 중복 행은 생기지 않음)
+
+**로그인 실패 경로의 스크린샷 확인** — 서버에서:
+```bash
+cd /srv/nice.bluetns.co.kr
+docker compose exec nice-worker python -m nice_bizline.app.server.login_check          # 정상 계정
+docker compose exec nice-worker python -m nice_bizline.app.server.login_check --wrong  # 일부러 실패
+docker compose exec nice-worker ls -la /data/debug                                     # 남은 파일 목록
+```
+→ `--wrong` 실행 후 "[이번 실행에서 새로 생긴 스크린샷] 0개" 가 나오면 실패 경로에 스크린샷이 없다는 실측 근거.
+
+**worker 자원 실측** (1,000건 도는 동안 10분 샘플링, 최대값 출력):
+```bash
+for i in $(seq 1 20); do docker stats --no-stream --format '{{.Name}} {{.CPUPerc}} {{.MemUsage}}' | grep worker; sleep 30; done | tee /tmp/w.txt; echo MAX:; sort -k2 -n -r /tmp/w.txt | head -1
+```
