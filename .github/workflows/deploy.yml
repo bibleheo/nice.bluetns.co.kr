@@ -4,10 +4,10 @@
 #       → 서버 .env 에 비밀값 기록 → docker compose up -d --build → 헬스체크
 #
 # 필요한 Secrets (저장소 Settings → Secrets and variables → Actions):
-#   NCP_SSH_KEY      배포용 개인키 (ed25519, 비밀번호 없음). 공개키는 포털 팀에 전달
-#   NCP_KNOWN_HOSTS  서버 호스트 키 한 줄 (포털 팀이 전달; ssh-keyscan 결과)
-#   NCP_HOST         서버 주소 (IP 또는 호스트명)
-#   NCP_USER         배포 계정 (포털이 만들어 주는 계정, 예: nice)
+#   DEPLOY_SSH_KEY      배포용 개인키 (ed25519, 비밀번호 없음). 공개키는 포털 팀에 전달
+#   DEPLOY_KNOWN_HOSTS  서버 호스트 키 한 줄 (포털 팀이 전달; ssh-keyscan 결과)
+#   DEPLOY_HOST         서버 주소 (IP 또는 호스트명)
+#   DEPLOY_USER         배포 계정 (포털이 만들어 주는 계정, 예: nice)
 #   NICE_ID, NICE_PW 나이스비즈라인 계정 (nice-worker 전용 .env 로 기록)
 # 선택 Variables:
 #   NCP_DEPLOY_DIR   배포 디렉터리 (기본 /srv/nice.bluetns.co.kr)
@@ -35,22 +35,22 @@ jobs:
       - name: SSH 키·호스트 키 설정
         run: |
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
-          printf '%s\n' "${{ secrets.NCP_SSH_KEY }}" > ~/.ssh/deploy_key
+          printf '%s\n' "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          printf '%s\n' "${{ secrets.NCP_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+          printf '%s\n' "${{ secrets.DEPLOY_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
           chmod 644 ~/.ssh/known_hosts
 
       - name: 서버 접속 확인
-        run: ssh $SSH_OPTS "${{ secrets.NCP_USER }}@${{ secrets.NCP_HOST }}" "echo ok && docker compose version"
+        run: ssh $SSH_OPTS "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" "echo ok && docker compose version"
 
       - name: 소스 동기화 (rsync)
         run: |
-          ssh $SSH_OPTS "${{ secrets.NCP_USER }}@${{ secrets.NCP_HOST }}" "mkdir -p '$DEPLOY_DIR'"
+          ssh $SSH_OPTS "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" "mkdir -p '$DEPLOY_DIR'"
           rsync -az --delete \
             --exclude '.git' --exclude 'debug' --exclude '__pycache__' \
             --exclude '*.progress.json' --exclude '.env' \
             -e "ssh $SSH_OPTS" \
-            ./ "${{ secrets.NCP_USER }}@${{ secrets.NCP_HOST }}:$DEPLOY_DIR/"
+            ./ "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:$DEPLOY_DIR/"
 
       - name: 비밀값(.env) 기록 — nice-worker 전용
         env:
@@ -59,12 +59,12 @@ jobs:
         run: |
           # 값은 stdin 으로만 전달 (원격 명령줄·로그에 남지 않음)
           printf 'NICE_ID=%s\nNICE_PW=%s\n' "$NICE_ID" "$NICE_PW" \
-            | ssh $SSH_OPTS "${{ secrets.NCP_USER }}@${{ secrets.NCP_HOST }}" \
+            | ssh $SSH_OPTS "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" \
                 "umask 077 && cat > '$DEPLOY_DIR/.env'"
 
       - name: docker compose up (빌드 포함)
         run: |
-          ssh $SSH_OPTS "${{ secrets.NCP_USER }}@${{ secrets.NCP_HOST }}" bash -s <<EOF
+          ssh $SSH_OPTS "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" bash -s <<EOF
             set -e
             cd '$DEPLOY_DIR'
             docker compose up -d --build --remove-orphans
@@ -74,7 +74,7 @@ jobs:
 
       - name: 헬스체크 (nice-web /_stcore/health)
         run: |
-          ssh $SSH_OPTS "${{ secrets.NCP_USER }}@${{ secrets.NCP_HOST }}" bash -s <<EOF
+          ssh $SSH_OPTS "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" bash -s <<EOF
             set -e
             cd '$DEPLOY_DIR'
             cid=\$(docker compose ps -q nice-web)

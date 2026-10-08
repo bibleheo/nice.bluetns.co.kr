@@ -35,22 +35,22 @@ ssh-keygen -t ed25519 -C "nice-deploy@github-actions" -f nice_deploy
 # 비밀번호는 Enter 두 번(빈 값)
 ```
 - `nice_deploy.pub` **한 줄** → 포털 팀에 전달 (회신 13번)
-- `nice_deploy` (개인키) → GitHub Secrets `NCP_SSH_KEY` 에만. **서버에서 키를 만들지 않는다.**
+- `nice_deploy` (개인키) → GitHub Secrets `DEPLOY_SSH_KEY` 에만. **서버에서 키를 만들지 않는다.**
 
 ### 1-2. 포털 팀에게 받을 것
 - 배포 계정 이름(예: `nice`), 디렉터리(`/srv/nice.bluetns.co.kr`)
 - 서버 주소(IP/호스트명)
-- **호스트 키 한 줄** (`ssh-keyscan -t ed25519 <서버>` 결과) → Secrets `NCP_KNOWN_HOSTS`
+- **호스트 키 한 줄** (`ssh-keyscan -t ed25519 <서버>` 결과) → Secrets `DEPLOY_KNOWN_HOSTS`
 
 ### 1-3. GitHub Secrets 등록
 저장소 → Settings → Secrets and variables → Actions → New repository secret
 
 | Secret | 값 |
 |--------|----|
-| `NCP_SSH_KEY` | 1-1 개인키 파일 내용 전체 |
-| `NCP_KNOWN_HOSTS` | 1-2 호스트 키 한 줄 |
-| `NCP_HOST` | 서버 주소 |
-| `NCP_USER` | 배포 계정 (예: `nice`) |
+| `DEPLOY_SSH_KEY` | 1-1 개인키 파일 내용 전체 |
+| `DEPLOY_KNOWN_HOSTS` | 1-2 호스트 키 한 줄 |
+| `DEPLOY_HOST` | 서버 주소 |
+| `DEPLOY_USER` | 배포 계정 (예: `nice`) |
 | `NICE_ID` | 나이스비즈라인 서버 전용 계정 ID |
 | `NICE_PW` | 나이스비즈라인 계정 비밀번호 |
 
