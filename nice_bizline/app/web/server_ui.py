@@ -27,6 +27,9 @@ from nice_bizline.app.server import jobs as J
 
 PORTAL_URL = "https://portal.bluetns.co.kr/"
 PORTAL_LOGOUT_URL = "https://portal.bluetns.co.kr/logout"
+# 포털 심볼: 포털팀이 준 파일을 앱 안에 두고 쓴다 (포털 주소에서 직접 불러오지 않음)
+PORTAL_SYMBOL_PATH = Path(__file__).resolve().parent / "static" / "portal-symbol.svg"
+APP_NAME = "기업정보 조회"
 
 SEC_PER_COMPANY = 25            # 회사 1건당 20∼30초의 중간값
 RETENTION_DAYS = 30
@@ -178,9 +181,8 @@ def render(cfg: dict) -> None:
     with st.sidebar:
         st.caption("로그인")
         st.markdown(f"**{email}**")
-        b1, b2 = st.columns(2)
-        b1.link_button("포털로 이동", PORTAL_URL, use_container_width=True)
-        b2.link_button("로그아웃", PORTAL_LOGOUT_URL, use_container_width=True)
+        # 로그아웃은 직접 만들지 않고 포털 주소로 링크만 (같은 탭)
+        st.html(f'<a class="nice-link" href="{PORTAL_LOGOUT_URL}" target="_self">로그아웃</a>')
         st.divider()
         st.caption("NICE 계정은 한 곳에서만 접속되어, 작업을 등록 순서대로 1건씩 처리합니다.")
         st.caption("수집은 서버가 대신 합니다. 탭을 닫아도 작업은 계속됩니다.")
@@ -189,7 +191,7 @@ def render(cfg: dict) -> None:
     if flash:
         st.toast(flash[0], icon=flash[1])
 
-    st.title("기업정보 조회")
+    st.html(header_html())
     st.caption("회사 명단 엑셀을 올리면 NICE BizLINE에서 회사 정보를 모아 엑셀로 돌려드립니다.")
 
     # 탭 전환 요청은 탭 위젯을 만들기 전에만 반영할 수 있다
@@ -201,8 +203,63 @@ def render(cfg: dict) -> None:
         render_job_list(store, email)
     with tab_new:
         _render_new_job(store, email)
-    # 모바일에서는 사이드바가 접혀 있어 본문 아래에도 둔다
-    st.caption(f"[포털로 이동]({PORTAL_URL}) · [로그아웃]({PORTAL_LOGOUT_URL})")
+    # 모바일에서는 사이드바가 접혀 있어 본문 아래에도 둔다 (같은 탭으로 이동)
+    st.html(f'<div class="nice-foot"><a class="nice-link" href="{PORTAL_URL}" target="_self">포털로 이동</a>'
+            f' · <a class="nice-link" href="{PORTAL_LOGOUT_URL}" target="_self">로그아웃</a></div>')
+
+
+# ── 헤더: 포털 공통 "포털로 이동" 버튼 규격 ──
+_HEADER_CSS = """
+<style>
+.nice-header{display:flex;align-items:center;gap:16px;flex-wrap:nowrap;margin:0 0 4px}
+.nice-portal-btn{display:inline-flex;align-items:center;gap:8px;box-sizing:border-box;height:36px;
+  padding:0 12px 0 7px;border:1px solid #e2e5ea;border-radius:10px;background:#fff;color:#1F2329;
+  font-size:14px;font-weight:600;line-height:1;text-decoration:none;white-space:nowrap;flex:none}
+.nice-portal-btn:hover{background:#F4F5F7;color:#1F2329;text-decoration:none}
+.nice-portal-btn:focus-visible{outline:2px solid #2F5FA8;outline-offset:2px}
+.nice-portal-btn img{width:22px;height:22px;flex:none;display:block}
+.nice-app-name{margin:0;padding:0;font-size:28px;font-weight:700;line-height:1.2;color:#1F2329}
+.nice-link,.nice-link:visited{color:#5B6270;font-size:14px;text-decoration:underline}
+.nice-foot{color:#5B6270;font-size:14px}
+@media (max-width:640px){
+  .nice-portal-btn{height:44px}
+  .nice-app-name{font-size:22px}
+}
+@media (max-width:360px){
+  .nice-portal-btn{padding:0 10px}
+  .nice-portal-btn .nice-portal-text{display:none}
+}
+</style>
+"""
+
+
+def _portal_symbol_img() -> str:
+    """포털 심볼 <img>. st.html 의 HTML 정리기가 인라인 <svg> 를 지우므로 data URI 로 넣는다.
+    (정적 파일 서빙은 .svg 를 이미지 형식으로 내보내지 않는다.) 서명 메타데이터는 뺀다."""
+    import base64
+    try:
+        svg = PORTAL_SYMBOL_PATH.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+    svg = re.sub(r"<metadata>.*?</metadata>", "", svg, flags=re.S)
+    svg = re.sub(r'\s+xmlns:c2pa="[^"]*"', "", svg).strip()
+    b64 = base64.b64encode(svg.encode("utf-8")).decode("ascii")
+    return f'<img src="data:image/svg+xml;base64,{b64}" alt="" width="22" height="22">'
+
+
+def header_html() -> str:
+    """앱 헤더: 맨 왼쪽 '포털로 이동' 버튼(심볼 22px + 문구), 그 오른쪽 앱 이름.
+    같은 탭에서 포털로 이동한다 (새 탭 금지). 좁은 화면에서는 심볼만, aria-label 유지.
+    target 속성은 st.html 정리기가 지우지만, 없으면 기본이 같은 탭이라 동작은 같다."""
+    return (
+        _HEADER_CSS
+        + '<div class="nice-header">'
+        + f'<a class="nice-portal-btn" href="{PORTAL_URL}" target="_self" aria-label="포털로 이동">'
+        + _portal_symbol_img()
+        + '<span class="nice-portal-text">포털로 이동</span></a>'
+        + f'<h1 class="nice-app-name">{APP_NAME}</h1>'
+        + "</div>"
+    )
 
 
 def _go_to_new_tab() -> None:

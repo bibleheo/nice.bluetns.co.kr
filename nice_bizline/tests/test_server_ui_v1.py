@@ -188,3 +188,37 @@ class TestScreenHelpers:
             if line.lstrip().startswith("#"):
                 continue
             assert line.count("~") < 2, line
+
+
+class TestPortalHeader:
+    """포털 공통 '포털로 이동' 버튼 규격."""
+
+    @pytest.fixture(autouse=True)
+    def _ui(self):
+        pytest.importorskip("streamlit")
+        from nice_bizline.app.web import server_ui
+        self.ui = server_ui
+
+    def test_button_links_to_portal_same_tab(self):
+        html = self.ui.header_html()
+        assert f'href="{self.ui.PORTAL_URL}"' in html
+        assert "_blank" not in html                          # 새 탭 금지
+        assert 'aria-label="포털로 이동"' in html            # 심볼만 보일 때도 이름 유지
+        assert ">포털로 이동</span>" in html                  # 문구 고정
+        # 버튼이 앱 이름보다 앞(왼쪽)
+        assert html.index("nice-portal-btn") < html.index("nice-app-name")
+
+    def test_symbol_bundled_without_metadata(self):
+        import base64
+        assert self.ui.PORTAL_SYMBOL_PATH.exists()            # 앱 안의 파일을 씀
+        img = self.ui._portal_symbol_img()
+        assert img.startswith('<img src="data:image/svg+xml;base64,')
+        svg = base64.b64decode(img.split("base64,")[1].split('"')[0]).decode()
+        assert "<metadata>" not in svg and "c2pa" not in svg
+        assert "portal.bluetns.co.kr" not in img              # 포털 주소에서 불러오지 않음
+
+    def test_spec_sizes_in_css(self):
+        css = self.ui._HEADER_CSS
+        assert "height:36px" in css and "height:44px" in css
+        assert "border-radius:10px" in css and "1px solid #e2e5ea" in css
+        assert "width:22px;height:22px" in css
