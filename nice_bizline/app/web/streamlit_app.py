@@ -56,7 +56,10 @@ def _init_session():
 
 
 def main():
-    st.set_page_config(page_title="나이스비즈라인 자동화", layout="wide")
+    if os.environ.get("SERVER_MODE") == "1":
+        st.set_page_config(page_title="기업정보 조회", page_icon=":material/domain:", layout="wide")
+    else:
+        st.set_page_config(page_title="나이스비즈라인 자동화", layout="wide")
     _init_session()
     cfg = _load_config()
 

@@ -48,6 +48,50 @@ def available_filter_fields(companies: list[dict]) -> list[str]:
     return out
 
 
+def _column_map(header_row) -> dict[int, str]:
+    """헤더 행 → {열 번호: 표준 이름}. 회사명 헤더가 없으면 1열을 회사명으로 본다."""
+    col_map: dict[int, str] = {}
+    for idx, val in enumerate(header_row):
+        canon = _match_header(val)
+        if canon:
+            col_map[idx] = canon
+    if "회사명" not in col_map.values():
+        # 회사명 헤더만 인식 실패 시 첫 컬럼을 회사명으로 간주하되,
+        # 이미 인식된 다른 컬럼(주소/대표자명 등)은 보존한다.
+        col_map = {i: c for i, c in col_map.items() if i != 0}
+        col_map[0] = "회사명"
+    return col_map
+
+
+def inspect_columns(path: str) -> list[dict]:
+    """화면의 '이렇게 읽었습니다' 카드용: 엑셀 열마다 어떻게 인식했는지.
+
+    반환: [{"original": 원래 열 이름, "field": 표준 이름 또는 None,
+            "renamed": 원래 이름과 표준 이름이 다르면 True, "guessed": 헤더로 못 찾아 1열로 본 경우 True}]
+    """
+    wb = openpyxl.load_workbook(path, data_only=True, read_only=True)
+    try:
+        header_row = next(wb.active.iter_rows(values_only=True), None)
+    finally:
+        wb.close()
+    if not header_row:
+        return []
+    col_map = _column_map(header_row)
+    out = []
+    for idx, val in enumerate(header_row):
+        original = "" if val is None else str(val).strip()
+        if not original and idx not in col_map:
+            continue
+        field = col_map.get(idx)
+        out.append({
+            "original": original or f"{idx + 1}열",
+            "field": field,
+            "renamed": bool(field) and _norm(original) != _norm(field),
+            "guessed": field == "회사명" and _match_header(val) != "회사명",
+        })
+    return out
+
+
 def read_company_list(path: str) -> list[dict]:
     """첫 시트 1행을 헤더로 보고, 2행부터 데이터를 읽어 dict 리스트로 반환.
 
@@ -62,17 +106,7 @@ def read_company_list(path: str) -> list[dict]:
         wb.close()
         return []
 
-    col_map: dict[int, str] = {}
-    for idx, val in enumerate(header_row):
-        canon = _match_header(val)
-        if canon:
-            col_map[idx] = canon
-
-    if "회사명" not in col_map.values():
-        # 회사명 헤더만 인식 실패 시 첫 컬럼을 회사명으로 간주하되,
-        # 이미 인식된 다른 컬럼(주소/대표자명 등)은 보존한다.
-        col_map = {i: c for i, c in col_map.items() if i != 0}
-        col_map[0] = "회사명"
+    col_map = _column_map(header_row)
 
     out: list[dict] = []
     for row in rows:

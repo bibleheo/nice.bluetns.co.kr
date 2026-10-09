@@ -64,7 +64,7 @@ class JobStore:
 
     # ── 생성/조회 ──
     def create(self, *, name: str, input_bytes: bytes, owner_email: str,
-               options: dict | None = None) -> dict:
+               options: dict | None = None, input_total: int | None = None) -> dict:
         job_id = time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6]
         os.makedirs(self.job_dir(job_id), exist_ok=True)
         with open(self.input_path(job_id), "wb") as f:
@@ -78,6 +78,8 @@ class JobStore:
             "started_at": None,
             "finished_at": None,
             "options": options or {},
+            # 입력 회사 수. 대기 중 예상 시간·"처리 N / 입력 M" 표시에 쓴다.
+            "input_total": int(input_total or 0),
             "progress": {"current": 0, "total": 0, "name": ""},
             "counts": {},
             "error": "",
@@ -137,7 +139,7 @@ class JobStore:
         return reset
 
     def finish(self, job_id: str, status: str, counts: dict | None = None,
-               error: str = "") -> None:
+               error: str = "", stop_reason: str = "") -> None:
         job = self.get(job_id)
         if not job:
             return
@@ -147,7 +149,16 @@ class JobStore:
             job["counts"] = counts
         if error:
             job["error"] = str(error)[:500]
+        if stop_reason:
+            job["stop_reason"] = str(stop_reason)[:200]
         self.save(job)
+
+    def set_input_total(self, job_id: str, total: int) -> None:
+        """예전 작업(input_total 없이 등록됨)에 입력 회사 수를 채운다."""
+        job = self.get(job_id)
+        if job and not job.get("input_total"):
+            job["input_total"] = int(total)
+            self.save(job)
 
     def update_progress(self, job_id: str, current: int, total: int, name: str) -> None:
         job = self.get(job_id)
@@ -208,6 +219,7 @@ class JobStore:
         job["status"] = PENDING
         job["finished_at"] = None
         job["error"] = ""
+        job.pop("stop_reason", None)
         job.setdefault("requeued", []).append(_ts())
         self.save(job)
         return True
