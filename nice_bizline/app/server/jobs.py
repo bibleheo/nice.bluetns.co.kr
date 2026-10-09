@@ -190,6 +190,28 @@ class JobStore:
     def cancel_requested(self, job_id: str) -> bool:
         return os.path.exists(self._cancel_path(job_id))
 
+    def requeue(self, job_id: str, email: str) -> bool:
+        """끝난(취소·정지·오류) 작업을 멈춘 지점부터 이어서 돌리도록 대기열에 다시 넣는다.
+
+        체크포인트(input 옆 .progress.json)가 그대로 있으므로 worker 가 resume 으로
+        이미 처리한 건을 건너뛰고 이어서 수집한다. 본인 작업만 가능.
+        """
+        job = self.get(job_id)
+        if not job or job.get("owner_email") != email:
+            return False
+        if job["status"] not in (STOPPED, CANCELED, ERROR):
+            return False
+        try:
+            os.remove(self._cancel_path(job_id))
+        except OSError:
+            pass
+        job["status"] = PENDING
+        job["finished_at"] = None
+        job["error"] = ""
+        job.setdefault("requeued", []).append(_ts())
+        self.save(job)
+        return True
+
     # ── 다운로드 기록 ──
     def record_download(self, job_id: str, email: str) -> None:
         job = self.get(job_id)

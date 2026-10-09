@@ -76,6 +76,25 @@ class TestJobStore:
         assert store.cleanup(retention_days=30) == [j["id"]]
         assert store.get(j["id"]) is None
 
+    def test_requeue_canceled_job_resumes_from_checkpoint(self, store, monkeypatch):
+        """취소된 작업을 '이어서 재개'하면 체크포인트 이후 건만 처리한다."""
+        monkeypatch.setenv("MOCK_MODE", "1")
+        xlsx = _xlsx_bytes([["회사명"], ["삼성전자"], ["현대자동차"], ["없는회사ZZZ"]])
+        j = store.create(name="list.xlsx", input_bytes=xlsx, owner_email="me@b.kr")
+        store.claim_next()
+        # 1차 실행: 시작 전 취소 → 아무것도 처리 안 하고 canceled (체크포인트는 finalize 가 저장)
+        store.request_cancel(j["id"], "me@b.kr")
+        assert run_job(store, j, _cfg(), collector=MockCollector(_cfg())) == J.CANCELED
+        # 다른 사람은 재개 불가, 본인은 가능 → pending 으로 복귀, cancel 플래그 제거
+        assert store.requeue(j["id"], "other@b.kr") is False
+        assert store.requeue(j["id"], "me@b.kr") is True
+        assert store.get(j["id"])["status"] == J.PENDING
+        assert store.cancel_requested(j["id"]) is False
+        # 2차 실행: 끝까지 돌아 done
+        store.claim_next()
+        assert run_job(store, store.get(j["id"]), _cfg(), collector=MockCollector(_cfg())) == J.DONE
+        assert store.get(j["id"])["counts"]["success"] == 2
+
     def test_record_download(self, store):
         j = store.create(name="a.xlsx", input_bytes=b"x", owner_email="me@b.kr")
         store.record_download(j["id"], "me@b.kr")
