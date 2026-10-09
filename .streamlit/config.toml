@@ -1,10 +1,38 @@
-# Codespaces 등 리버스 프록시 뒤에서 안정적으로 뜨도록 하는 설정
+# 서버(nice-web)·로컬 공통 Streamlit 설정
+# 리버스 프록시(포털 게이트웨이, Codespaces) 뒤에서 안정적으로 뜨도록 하는 설정
 [server]
 headless = true
 address = "0.0.0.0"
 port = 8501
 enableCORS = false
 enableXsrfProtection = false
+enableStaticServing = true      # nice_bizline/app/web/static 의 글꼴 파일 제공
+maxUploadSize = 25              # MB. 운영(docker-compose)과 같은 값
 
 [browser]
 gatherUsageStats = false
+
+[client]
+toolbarMode = "minimal"         # 오른쪽 위 Deploy 메뉴 숨김
+
+# 디자인 시안 v1 테마. 주 색은 임시값 — 포털 주 색이 확정되면 primaryColor 만 바꾼다.
+[theme]
+base = "light"
+primaryColor = "#2F5FA8"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F4F5F7"
+textColor = "#1F2329"
+borderColor = "#DFE2E7"
+baseRadius = "8px"
+font = "Pretendard, sans-serif"
+
+# 글꼴: Pretendard (SIL Open Font License 1.1, static/Pretendard-LICENSE.txt)
+[[theme.fontFaces]]
+family = "Pretendard"
+url = "app/static/Pretendard-Regular.woff2"
+weight = 400
+
+[[theme.fontFaces]]
+family = "Pretendard"
+url = "app/static/Pretendard-SemiBold.woff2"
+weight = 600

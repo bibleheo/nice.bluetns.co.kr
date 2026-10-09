@@ -70,6 +70,7 @@ def run_job(store: J.JobStore, job: dict, cfg: dict, collector=None) -> str:
     if not companies:
         store.finish(job_id, J.ERROR, error="입력이 비어 있음")
         return J.ERROR
+    store.set_input_total(job_id, len(companies))     # 예전 작업 보정
 
     mock = os.environ.get("MOCK_MODE") == "1"
     if collector is None:
@@ -99,6 +100,7 @@ def run_job(store: J.JobStore, job: dict, cfg: dict, collector=None) -> str:
     progress_every = _env_int("LOG_EVERY", 10)
     tag = f"[{job_id}]"
     last_progress_save = 0.0
+    last_error_msg = ""
     try:
         for ev in run_pipeline(collector, cfg, opts, state,
                                stop_check=lambda: store.cancel_requested(job_id)):
@@ -106,6 +108,8 @@ def run_job(store: J.JobStore, job: dict, cfg: dict, collector=None) -> str:
             if t == "log":
                 say(ev["level"], ev["message"])
                 msg = ev["message"]
+                if ev["level"] == "error":
+                    last_error_msg = msg
                 if ev["level"] == "error" or any(m in msg for m in _STDOUT_MARKERS):
                     (log.error if ev["level"] == "error" else log.info)("%s %s", tag, msg)
             elif t == "progress":
@@ -137,9 +141,10 @@ def run_job(store: J.JobStore, job: dict, cfg: dict, collector=None) -> str:
         return J.ERROR
 
     s = state.summary
+    # total = 입력 회사 수, processed = 지금까지 처리한 회사 수(체크포인트 누적)
     counts = {k: s.get(k, 0) for k in ("total", "success", "not_found", "ambiguous", "error")}
     counts["필터제외"] = s.get("필터제외", 0)
-    store.update_progress(job_id, s.get("total", 0), s.get("total", 0), "완료")
+    counts["processed"] = len(state.processed_keys)
 
     if store.cancel_requested(job_id):
         status = J.CANCELED
@@ -147,9 +152,26 @@ def run_job(store: J.JobStore, job: dict, cfg: dict, collector=None) -> str:
         status = J.STOPPED          # 연결 장애 등으로 안전 정지 → 재큐잉 가능
     else:
         status = J.DONE
+    if status == J.DONE:
+        store.update_progress(job_id, s.get("total", 0), s.get("total", 0), "완료")
+    else:
+        # 멈춘 지점을 남긴다 (화면의 "1,630 / 16,000 · 처리분 저장됨")
+        store.update_progress(job_id, counts["processed"], s.get("total", 0), "")
     say("info", f"작업 종료 - 상태 {status}, 요약 {counts}")
-    store.finish(job_id, status, counts=counts)
+    store.finish(job_id, status, counts=counts,
+                 stop_reason=stop_reason_text(last_error_msg) if status == J.STOPPED else "")
     return status
+
+
+def stop_reason_text(msg: str) -> str:
+    """안전 정지 로그를 화면용 이유 문구로 바꾼다. 예: '사이트 연결 오류가 5번 이어져'"""
+    import re
+    m = re.search(r"연속 (\d+)건 오류", msg or "")
+    if m:
+        return f"사이트 연결 오류가 {m.group(1)}번 이어져"
+    if "재로그인" in (msg or ""):
+        return "다시 로그인이 계속 실패해"
+    return ""
 
 
 def _live_counts(state: PipelineState) -> dict:

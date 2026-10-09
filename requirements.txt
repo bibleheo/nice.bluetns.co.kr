@@ -2,4 +2,4 @@ openpyxl
 playwright
 PyYAML
 keyring
-streamlit
+streamlit>=1.65,<2
