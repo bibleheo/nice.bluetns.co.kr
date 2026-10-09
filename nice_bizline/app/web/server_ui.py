@@ -182,10 +182,6 @@ def render(cfg: dict) -> None:
         b1.link_button("포털로 이동", PORTAL_URL, use_container_width=True)
         b2.link_button("로그아웃", PORTAL_LOGOUT_URL, use_container_width=True)
         st.divider()
-        n_run = sum(1 for j in jobs if j["status"] == J.RUNNING)
-        n_wait = sum(1 for j in jobs if j["status"] == J.PENDING)
-        st.caption("지금 서버")
-        st.markdown(f"**{n_run}** 실행 중 · **{n_wait}** 대기")
         st.caption("NICE 계정은 한 곳에서만 접속되어, 작업을 등록 순서대로 1건씩 처리합니다.")
         st.caption("수집은 서버가 대신 합니다. 탭을 닫아도 작업은 계속됩니다.")
 
@@ -205,6 +201,8 @@ def render(cfg: dict) -> None:
         render_job_list(store, email)
     with tab_new:
         _render_new_job(store, email)
+    # 모바일에서는 사이드바가 접혀 있어 본문 아래에도 둔다
+    st.caption(f"[포털로 이동]({PORTAL_URL}) · [로그아웃]({PORTAL_LOGOUT_URL})")
 
 
 def _go_to_new_tab() -> None:
@@ -226,7 +224,10 @@ def render_job_list(store: J.JobStore, email: str) -> None:
     scope_key = st.segmented_control(
         "보기", ["mine", "all"], default="mine", required=True,
         format_func=lambda k: names[k], label_visibility="collapsed", key="scope") or "mine"
-    st.caption(f"5초마다 새로고침 · 끝난 작업은 {RETENTION_DAYS}일 뒤 자동 삭제")
+    n_run = sum(1 for j in jobs if j["status"] == J.RUNNING)
+    n_wait = sum(1 for j in jobs if j["status"] == J.PENDING)
+    st.caption(f"지금 서버 **{n_run}** 실행 중 · **{n_wait}** 대기 · 5초마다 새로고침 · "
+               f"끝난 작업은 {RETENTION_DAYS}일 뒤 자동 삭제")
 
     shown = mine if scope_key == "mine" else jobs
     if not shown:
@@ -245,8 +246,8 @@ def render_job_list(store: J.JobStore, email: str) -> None:
             group.sort(key=lambda j: j["id"], reverse=True)
         else:
             group.sort(key=lambda j: (statuses.index(j["status"]), j["id"]))
-        suffix = f" · {RETENTION_DAYS}일 보관" if title == "끝난 작업" else ""
-        st.markdown(f"#### {title} · {len(group)}{suffix}")
+        suffix = f" :gray[{RETENTION_DAYS}일 보관]" if title == "끝난 작업" else ""
+        st.markdown(f"**{title} · {len(group)}**{suffix}")
         for job in group:
             _job_row(store, jobs, job, email)
 
@@ -302,10 +303,8 @@ def _job_row(store: J.JobStore, jobs: list[dict], job: dict, email: str) -> None
                 t = _parse_ts(job.get("finished_at"))
                 stop_at = f"{t:%H:%M} 멈춤  \n" if t else ""
                 st.caption(f"{stop_at}재개 시 {_human(_remaining_sec(job))}")
-            elif s in (J.DONE, J.CANCELED):
-                st.caption(f"{_delete_date(job)} 삭제" if _delete_date(job) else "")
-            else:
-                st.caption("—")
+            elif s in (J.DONE, J.CANCELED) and _delete_date(job):
+                st.caption(f"{_delete_date(job)} 삭제")
 
         with c5:
             if not mine:
@@ -423,9 +422,8 @@ def _detail(store: J.JobStore, jobs: list[dict], job: dict, email: str, cancel_r
                    f"{when}{why + ' ' if why else ''}안전하게 멈췄습니다. "
                    f"처리한 {done:,}건은 저장되어 있고, 재개하면 {done + 1:,}번째 회사부터 이어서 합니다.",
                    icon=":material/pause_circle:")
-        b1, b2, b3 = st.columns([1.1, 1.5, 3], vertical_alignment="center")
-        with b1:
-            _requeue_button(store, jobs, job, email, key=f"rq_detail_{jid}", primary=True)
+        # "이어서 재개"는 줄 오른쪽의 주 버튼 하나만 둔다
+        b2, b3 = st.columns([1.5, 4], vertical_alignment="center")
         with b2:
             _download_button(store, job, email, key=f"dl_detail_{jid}", primary=False,
                              label="지금까지 결과 받기")
@@ -455,20 +453,23 @@ def _detail(store: J.JobStore, jobs: list[dict], job: dict, email: str, cancel_r
         _counts(job)
 
     st.markdown("**진행 기록**")
-    st.markdown(_humanize_log(store.tail_log(jid, 400)))
+    st.markdown(_humanize_log(store.tail_log(jid, 400), start=_parse_ts(job.get("created_at"))))
     with st.expander("원문 로그 보기 (최근 40줄)"):
         st.code(store.tail_log(jid, 40) or "로그 없음", language=None)
 
 
 def _counts(job: dict) -> None:
     c = job.get("counts") or {}
-    a, b = st.columns([1, 2.4])
-    a.metric("쓸 수 있는 결과", f"{c.get('success', 0):,}건", help='결과 파일 "결과" 시트')
-    m = b.columns(4)
-    m[0].metric("확인필요", f"{c.get('ambiguous', 0):,}", help='"확인필요" 시트에서 직접 고르기')
-    m[1].metric("미발견", f"{c.get('not_found', 0):,}", help='"미발견·오류" 시트')
-    m[2].metric("오류", f"{c.get('error', 0):,}", help='"미발견·오류" 시트')
-    m[3].metric("필터 제외", f"{c.get('필터제외', 0):,}", help="조건 미달로 결과에서 뺌")
+    a, b = st.columns([1, 2.4], vertical_alignment="center")
+    with a:
+        st.metric("쓸 수 있는 결과", f"{c.get('success', 0):,}건")
+        st.caption('결과 파일 "결과" 시트')
+    # 나머지 4개는 어느 시트에서 보는지 바로 읽히도록 한 줄씩
+    b.markdown(
+        f"**{c.get('ambiguous', 0):,}** 확인필요 · :gray[\"확인필요\" 시트에서 직접 고르기]  \n"
+        f"**{c.get('not_found', 0):,}** 미발견 · :gray[\"미발견·오류\" 시트]  \n"
+        f"**{c.get('error', 0):,}** 오류 · :gray[\"미발견·오류\" 시트]  \n"
+        f"**{c.get('필터제외', 0):,}** 필터 제외 · :gray[조건 미달로 결과에서 뺌]")
     st.caption(f"처리 {_done(job):,}건 / 입력 {_total(job):,}건")
 
 
@@ -488,23 +489,37 @@ _LOG_RULES = [
 _LOG_LINE = re.compile(r"^(\d{2}:\d{2}):\d{2}\s+\[\w+\]\s+(.*)$")
 
 
-def _humanize_log(raw: str, limit: int = 6) -> str:
-    out: list[str] = []
+def _humanize_log(raw: str, limit: int = 6, start: dt.datetime | None = None) -> str:
+    """로그를 '시각 + 문장' 목록으로. 로그에는 시:분:초만 있으므로 날짜는
+    등록 시각(start)에서 시작해 시각이 거꾸로 가면 하루를 넘긴 것으로 본다."""
+    day = (start or now_seoul()).date()
+    prev = ""
+    items: list[tuple[dt.date, str, str]] = []
     for line in raw.splitlines():
         m = _LOG_LINE.match(line.strip())
         if not m:
             continue
         hm, msg = m.groups()
+        hms = line.strip()[:8]
+        if prev and hms < prev:
+            day += dt.timedelta(days=1)
+        prev = hms
         for rx, fmt in _LOG_RULES:
             mm = rx.search(msg)
             if mm:
                 text = fmt(mm)
                 # 연속된 같은 문장(예: 접속 시간 연장 반복)은 마지막 것만 남긴다
-                if out and out[-1].endswith(f" {text}"):
-                    out.pop()
-                out.append(f"- `{hm}` {text}")
+                if items and items[-1][2] == text:
+                    items.pop()
+                items.append((day, hm, text))
                 break
-    return "\n".join(out[-limit:]) or ":gray[아직 기록이 없습니다.]"
+    items = items[-limit:]
+    out, last_day = [], None
+    for d, hm, text in items:
+        stamp = hm if d == last_day else f"{d.month:02d}/{d.day:02d} {hm}"
+        last_day = d
+        out.append(f"- :gray[{stamp}] {text}")
+    return "\n".join(out) or ":gray[아직 기록이 없습니다.]"
 
 
 @st.dialog("작업을 취소할까요?")
@@ -512,10 +527,11 @@ def confirm_cancel(store: J.JobStore, job: dict, email: str) -> None:
     st.write("지금 처리 중인 회사까지 마치고 멈춥니다. 처리한 건은 저장되어 나중에 이어서 할 수 있습니다.")
     st.caption(f"{job['name']} · {_done(job):,} / {_total(job):,} 처리")
     a, b = st.columns(2)
-    if a.button("계속 진행", use_container_width=True, key="dlg_keep"):
-        st.rerun()
-    if b.button("취소하기", type="primary", use_container_width=True, key="dlg_cancel"):
+    # 되돌리기 어려운 쪽(취소하기)은 보조, 계속 진행을 주 버튼으로
+    if a.button("취소하기", use_container_width=True, key="dlg_cancel"):
         store.request_cancel(job["id"], email)
+        st.rerun()
+    if b.button("계속 진행", type="primary", use_container_width=True, key="dlg_keep"):
         st.rerun()
 
 
@@ -567,7 +583,7 @@ def _render_new_job(store: J.JobStore, email: str) -> None:
         return
 
     with left:
-        st.caption(f"회사 {len(companies):,}건 · {uploaded.size / 1024:,.1f}KB")
+        st.caption(f"회사 {len(companies):,}건")
         st.markdown("#### 2. 이렇게 읽었습니다")
         used = _column_card(columns, companies)
         st.markdown("#### 3. 옵션")
@@ -575,8 +591,12 @@ def _render_new_job(store: J.JobStore, email: str) -> None:
         result_filter = _result_filter_options()
 
     used_cols = [f for f in ("회사명", "대표자명", "주소", "사업자번호") if f in used]
-    with right:
+    with left:
+        # 옵션을 고른 바로 아래에서 등록하도록 왼쪽 열 맨 아래에 둔다
+        st.markdown("#### 4. 등록 전 확인")
         clicked = _register_summary(jobs, len(companies), used_cols, narrow, result_filter)
+    with right:
+        _time_guide(jobs)
     if clicked:
         n_ahead, wait = _queue_wait(jobs)
         store.create(
@@ -606,17 +626,25 @@ def _format_guide() -> None:
         st.caption("첫 줄은 열 이름이어야 합니다. 대표자명·주소가 있으면 이름이 같은 회사를 구분할 수 있습니다.")
 
 
+def _thin_rule() -> None:
+    """카드 안 구분선. st.divider 는 위아래 여백이 커서 카드 안에 빈 줄이 생긴다."""
+    st.html('<hr style="margin:2px 0;border:none;border-top:1px solid #DFE2E7">')
+
+
 def _time_guide(jobs: list[dict]) -> None:
     n_ahead, wait = _queue_wait(jobs)
     with st.container(border=True):
         st.markdown("**얼마나 걸리나요?**")
-        st.markdown("회사 1건당 20∼30초")
-        st.markdown("100건 약 1시간 · 2,000건 약 하루 · 16,000건 4∼5일")
-        st.divider()
+        st.markdown("회사 1건당 20∼30초  \n:gray[100건] 약 1시간  \n:gray[2,000건] 약 하루  \n"
+                    ":gray[16,000건] 4∼5일")
+        _thin_rule()
+        n_run = sum(1 for j in jobs if j["status"] == J.RUNNING)
+        n_wait = sum(1 for j in jobs if j["status"] == J.PENDING)
         if n_ahead:
-            st.markdown(f"지금 대기 {n_ahead}건 · 새 작업은 {_human(wait)} 뒤 시작")
+            st.markdown(f"지금 앞에 {n_ahead}건 (실행 중 {n_run} · 대기 {n_wait}) · "
+                        f"새 작업은 {_human(wait)} 뒤 시작")
         else:
-            st.markdown("지금 대기 0건 · 새 작업은 바로 시작")
+            st.markdown("지금 앞에 0건 · 새 작업은 바로 시작")
         st.caption(f"결과 파일은 {RETENTION_DAYS}일 동안 보관됩니다.")
 
 
@@ -645,8 +673,9 @@ def _column_card(columns: list[dict], companies: list[dict]) -> set[str]:
 
         n = min(3, len(companies))
         st.markdown(f"**첫 {n}건 미리보기**")
-        show = [f for f in ("회사명", "대표자명", "주소", "사업자번호", "전화번호")
-                if any(c.get(f) for c in companies[:n])]
+        # 미리보기는 실제로 쓰는 열만 (사용 안 하는 열은 위 목록에서 이미 안내)
+        show = [f for f in ("회사명", "대표자명", "주소", "사업자번호")
+                if f in used and any(c.get(f) for c in companies[:n])]
         st.dataframe([{k: c.get(k, "") for k in show} for c in companies[:n]],
                      hide_index=True, use_container_width=True)
         st.caption('열을 잘못 읽었다면 열 이름을 "회사명 / 대표자명 / 주소"로 고쳐 다시 올려 주세요.')
@@ -724,13 +753,12 @@ def _register_summary(jobs: list[dict], n: int, used_cols: list[str], narrow: li
     else:
         cond = "없음"
     with st.container(border=True):
-        st.markdown("**등록 전 확인**")
         st.markdown(
             f"회사 · **{n:,}건**  \n"
             f"사용하는 열 · {', '.join(used_cols)}  \n"
             f"동명 회사 · {_with_ro('·'.join(narrow)) + ' 걸러냄' if narrow else '모두 담음'}  \n"
             f"결과 조건 · {cond}")
-        st.divider()
+        _thin_rule()
         start = _clock(wait) + (f" · 앞에 {n_ahead}건" if n_ahead else "")
         st.markdown(f"시작 · {start}  \n소요 · {_human(run)}  \n**완료 · {_clock(wait + run)}**")
         clicked = st.button("작업 등록", type="primary", use_container_width=True, key="register")

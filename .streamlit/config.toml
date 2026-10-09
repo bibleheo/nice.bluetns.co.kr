@@ -7,6 +7,7 @@ port = 8501
 enableCORS = false
 enableXsrfProtection = false
 enableStaticServing = true      # nice_bizline/app/web/static 의 글꼴 파일 제공
+maxUploadSize = 25              # MB. 운영(docker-compose)과 같은 값
 
 [browser]
 gatherUsageStats = false

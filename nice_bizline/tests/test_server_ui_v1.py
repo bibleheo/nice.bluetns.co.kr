@@ -160,6 +160,22 @@ class TestScreenHelpers:
         assert "1,630건까지 저장" in out
         assert "연결 오류 5번 연속 → 안전 정지" in out
         assert "수집 완료" not in out
+        assert "`" not in out                              # 코드 글씨 대신 회색 일반 글씨
+        assert ":gray[" in out
+
+    def test_humanize_log_dates_across_midnight(self):
+        import datetime as dt
+        raw = "\n".join([
+            "23:50:00  [info] 로그인 성공",
+            "23:59:00  [info] 체크포인트 저장 (10건)",
+            "00:09:00  [info] 체크포인트 저장 (20건)",
+            "00:19:00  [info] 체크포인트 저장 (30건)",
+        ])
+        out = self.ui._humanize_log(raw, start=dt.datetime(2026, 10, 9, 23, 49)).splitlines()
+        assert out[0].startswith("- :gray[10/09 23:50]")   # 첫 줄은 날짜 포함
+        assert out[1].startswith("- :gray[23:59]")          # 같은 날은 시각만
+        assert out[2].startswith("- :gray[10/10 00:09]")    # 날짜가 바뀌면 날짜 포함
+        assert out[3].startswith("- :gray[00:19]")
 
     def test_particle(self):
         assert self.ui._with_ro("주소") == "주소로"
