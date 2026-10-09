@@ -206,6 +206,13 @@ def _render_job_list(store: J.JobStore, email: str) -> None:
                     if b1.button("취소", key=f"cancel_{job['id']}"):
                         store.request_cancel(job["id"], email)
                         st.rerun(scope="fragment")
+                if status in (J.STOPPED, J.CANCELED, J.ERROR):
+                    done_n = int((job.get("progress") or {}).get("current") or 0)
+                    if b1.button("▶ 이어서 재개", key=f"requeue_{job['id']}",
+                                 help=f"멈춘 지점(약 {done_n}건 처리)부터 이어서 수집합니다. "
+                                      "처리한 건은 다시 하지 않습니다."):
+                        store.requeue(job["id"], email)
+                        st.rerun(scope="fragment")
                 res = store.result_path(job["id"])
                 if status in (J.DONE, J.STOPPED, J.CANCELED) and os.path.exists(res):
                     with open(res, "rb") as f:
