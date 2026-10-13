@@ -29,6 +29,7 @@ import yaml
 
 from ..core.collector import MockCollector, NiceBizlineCollector
 from ..core.pipeline import PipelineOptions, PipelineState, run_pipeline
+from ..core.redact import redact
 from ..core.timeutil import now_seoul
 from ..excelio.reader import read_company_list
 from ..excelio.writer import write_results
@@ -59,13 +60,13 @@ def run_job(store: J.JobStore, job: dict, cfg: dict, collector=None) -> str:
     opts_in = job.get("options") or {}
 
     def say(level: str, msg: str) -> None:
-        store.append_log(job_id, f"{now_seoul().strftime('%H:%M:%S')}  [{level}] {msg}")
+        store.append_log(job_id, f"{now_seoul().strftime('%H:%M:%S')}  [{level}] {redact(msg)}")
 
     try:
         companies = read_company_list(inp)
     except Exception as e:
         say("error", f"입력 엑셀 읽기 실패: {e}")
-        store.finish(job_id, J.ERROR, error=f"입력 읽기 실패: {e}")
+        store.finish(job_id, J.ERROR, error=redact(f"입력 읽기 실패: {e}"))
         return J.ERROR
     if not companies:
         store.finish(job_id, J.ERROR, error="입력이 비어 있음")
@@ -106,8 +107,8 @@ def run_job(store: J.JobStore, job: dict, cfg: dict, collector=None) -> str:
                                stop_check=lambda: store.cancel_requested(job_id)):
             t = ev.get("type")
             if t == "log":
-                say(ev["level"], ev["message"])
-                msg = ev["message"]
+                msg = redact(ev["message"])
+                say(ev["level"], msg)
                 if ev["level"] == "error":
                     last_error_msg = msg
                 if ev["level"] == "error" or any(m in msg for m in _STDOUT_MARKERS):
@@ -126,8 +127,8 @@ def run_job(store: J.JobStore, job: dict, cfg: dict, collector=None) -> str:
                              state.summary.get("필터제외", 0))
     except Exception as e:
         say("error", f"예상치 못한 오류: {e}")
-        store.append_log(job_id, traceback.format_exc())
-        store.finish(job_id, J.ERROR, error=str(e))
+        store.append_log(job_id, redact(traceback.format_exc()))
+        store.finish(job_id, J.ERROR, error=redact(e))
         return J.ERROR
 
     # 결과 저장 (중단·정지여도 처리분은 저장)
@@ -137,7 +138,7 @@ def run_job(store: J.JobStore, job: dict, cfg: dict, collector=None) -> str:
                       summary=state.summary, finance_years=1)
     except Exception as e:
         say("error", f"결과 저장 실패: {e}")
-        store.finish(job_id, J.ERROR, error=f"결과 저장 실패: {e}")
+        store.finish(job_id, J.ERROR, error=redact(f"결과 저장 실패: {e}"))
         return J.ERROR
 
     s = state.summary
@@ -228,8 +229,9 @@ def main() -> None:
         try:
             status = run_job(store, job, cfg)
         except Exception as e:         # run_job 내부에서 못 잡은 경우의 최후 방어
-            log.exception("작업 실패 %s", job["id"])
-            store.finish(job["id"], J.ERROR, error=str(e))
+            # 스택트레이스는 계정 값이 섞일 수 있어 stdout 에 그대로 찍지 않는다
+            log.error("작업 실패 %s: %s", job["id"], redact(e))
+            store.finish(job["id"], J.ERROR, error=redact(e))
             status = J.ERROR
         log.info("작업 종료 %s → %s", job["id"], status)
 

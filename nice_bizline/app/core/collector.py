@@ -78,8 +78,13 @@ class NiceBizlineCollector:
         for _ in range(2):
             if not self._visible(sel["id_input"], timeout=4000):
                 break
-            self._page.fill(sel["id_input"], user_id)
-            self._page.fill(sel["pw_input"], password)
+            try:
+                self._page.fill(sel["id_input"], user_id)
+                self._page.fill(sel["pw_input"], password)
+            except Exception:
+                # Playwright 오류 문구에는 입력하려던 값(계정·비밀번호)이 들어간다.
+                # 원래 예외를 연결하지 않고(from None) 값 없는 오류로 바꿔 올린다.
+                raise CollectorError("로그인 입력란을 채우지 못했습니다 (화면 구조 변경 가능)") from None
             self._page.click(sel["submit_btn"])
             self._dismiss_concurrent_popup()
             if self._visible(sel["logged_in_marker"], timeout=10000):
