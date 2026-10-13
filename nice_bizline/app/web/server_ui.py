@@ -83,6 +83,21 @@ def _user_id(email: str) -> str:
     return (email or "").split("@")[0]
 
 
+_MD_SPECIAL = set("\\`*_{}[]()#+-.!|<>:$" + chr(126))
+
+
+def _md(text) -> str:
+    """사용자가 정한 글자(파일명·회사명·아이디)를 마크다운으로 해석되지 않게 이스케이프.
+    예: 파일명 "[여기](http://...)" 가 다른 사람 목록에 링크로 보이는 것을 막는다."""
+    s = " ".join(str(text or "").split())          # 줄바꿈·연속 공백 제거
+    # 주소 모양(http://, www., 이메일)은 자동 링크가 되므로 보이지 않는 공백(U+200B)으로 끊는다
+    zw = "\u200b"
+    s = re.sub(r"(?i)\b(https?|ftp|mailto)(:)", lambda m: m.group(1) + zw + m.group(2), s)
+    s = re.sub(r"(?i)\bwww\.", lambda m: m.group(0)[:3] + zw + ".", s)
+    s = s.replace("@", zw + "@")
+    return "".join("\\" + ch if ch in _MD_SPECIAL else ch for ch in s)
+
+
 # ── 숫자·시간 ──
 def _total(job: dict) -> int:
     """입력 회사 수. 예전 작업은 input_total 이 없어 집계·진행값으로 대신한다."""
@@ -318,7 +333,7 @@ def _job_row(store: J.JobStore, jobs: list[dict], job: dict, email: str) -> None
     meta = STATUS.get(s, STATUS[J.ERROR])
     cancel_req = s == J.RUNNING and store.cancel_requested(jid)
     total, done = _total(job), _done(job)
-    who = "나" if mine else _user_id(job.get("owner_email", ""))
+    who = "나" if mine else _md(_user_id(job.get("owner_email", "")))
 
     with st.container(border=True):
         c1, c2, c3, c4, c5 = st.columns([1.5, 2.3, 2.4, 1.3, 1.4], vertical_alignment="center")
@@ -329,11 +344,11 @@ def _job_row(store: J.JobStore, jobs: list[dict], job: dict, email: str) -> None
             st.badge(label, icon=meta["icon"], color=meta["color"])
             if cancel_req:
                 st.badge("취소 요청됨", color="gray")
-        c2.markdown(f"**{job['name']}**  \n:gray[{who} · {_registered(job)}]")
+        c2.markdown(f"**{_md(job['name'])}**  \n:gray[{who} · {_registered(job)}]")
 
         with c3:
             if s == J.RUNNING and total:
-                now_name = (job.get("progress") or {}).get("name", "")
+                now_name = _md((job.get("progress") or {}).get("name", ""))
                 st.progress(min(1.0, done / total),
                             text=f"{done:,} / {total:,}" + (f" · 지금 {now_name}" if now_name else ""))
             elif s == J.STOPPED and total:
@@ -458,7 +473,7 @@ def _detail(store: J.JobStore, jobs: list[dict], job: dict, email: str, cancel_r
                 f"{_clock(wait + _remaining_sec(job))} 완료될 예정입니다. 창을 닫아도 됩니다.",
                 icon=":material/schedule:")
     elif s == J.RUNNING:
-        now_name = (job.get("progress") or {}).get("name", "")
+        now_name = _md((job.get("progress") or {}).get("name", ""))
         body = (f"**서버가 수집하고 있습니다.**  \n{done:,} / {total:,}"
                 + (f" · 지금 {now_name}" if now_name else "")
                 + f" · {_clock(_remaining_sec(job))} 완료 예정. 창을 닫아도 계속됩니다.")
@@ -582,7 +597,7 @@ def _humanize_log(raw: str, limit: int = 6, start: dt.datetime | None = None) ->
 @st.dialog("작업을 취소할까요?")
 def confirm_cancel(store: J.JobStore, job: dict, email: str) -> None:
     st.write("지금 처리 중인 회사까지 마치고 멈춥니다. 처리한 건은 저장되어 나중에 이어서 할 수 있습니다.")
-    st.caption(f"{job['name']} · {_done(job):,} / {_total(job):,} 처리")
+    st.caption(f"{_md(job['name'])} · {_done(job):,} / {_total(job):,} 처리")
     a, b = st.columns(2)
     # 되돌리기 어려운 쪽(취소하기)은 보조, 계속 진행을 주 버튼으로
     if a.button("취소하기", use_container_width=True, key="dlg_cancel"):

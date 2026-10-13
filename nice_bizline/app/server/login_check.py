@@ -15,6 +15,7 @@ from pathlib import Path
 import yaml
 
 from ..core.collector import CollectorError, NiceBizlineCollector
+from ..core.redact import redact
 
 _ROOT = Path(__file__).resolve().parents[2]
 
@@ -47,10 +48,10 @@ def main() -> int:
         print("[로그인] 성공")
         rc = 0
     except CollectorError as e:
-        print(f"[로그인] 실패 — 화면/오류 문구: {e}")
+        print(f"[로그인] 실패 — 화면/오류 문구: {redact(e, [uid, pw])}")
         rc = 1
     except Exception as e:                      # 네트워크 등
-        print(f"[로그인] 예외 — {type(e).__name__}: {e}")
+        print(f"[로그인] 예외 — {type(e).__name__}: {redact(e, [uid, pw])}")
         rc = 1
     finally:
         try:
