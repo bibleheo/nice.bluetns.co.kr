@@ -203,3 +203,86 @@ class TestBizSearchFallback:
                         narrow_fields=["사업자번호"])
         assert state.summary["success"] == 0 and state.summary["not_found"] == 1
         assert "사업자번호" in state.unfound[0]["사유"]
+
+
+class TestPauseAndRestart:
+    @pytest.fixture
+    def store(self, tmp_path):
+        return J.JobStore(str(tmp_path))
+
+    def _xlsx(self, tmp_path, names):
+        import openpyxl
+        wb = openpyxl.Workbook()
+        wb.active.append(["회사명"])
+        for n in names:
+            wb.active.append([n])
+        p = tmp_path / "in.xlsx"
+        wb.save(p)
+        return p.read_bytes()
+
+    def test_pause_pending_is_immediate_and_only_owner(self, store):
+        j = store.create(name="a.xlsx", input_bytes=b"x", owner_email="me@b.kr")
+        assert store.request_pause(j["id"], "other@b.kr") is False
+        assert store.request_pause(j["id"], "me@b.kr") is True
+        assert store.get(j["id"])["status"] == J.PAUSED
+        assert store.claim_next() is None                     # 일시정지 작업은 실행되지 않는다
+
+    def test_paused_job_is_not_auto_resumed(self, store):
+        j = store.create(name="a.xlsx", input_bytes=b"x", owner_email="me@b.kr")
+        store.request_pause(j["id"], "me@b.kr")
+        meta = store.get(j["id"])
+        meta["finished_at"] = "2020-01-01 00:00:00"
+        store.save(meta)
+        assert store.auto_requeue_stopped() == []
+
+    def test_pause_running_then_resume_continues(self, store, tmp_path, monkeypatch):
+        from nice_bizline.app.server.worker import run_job
+        monkeypatch.setenv("MOCK_MODE", "1")
+        j = store.create(name="a.xlsx", input_bytes=self._xlsx(tmp_path, ["삼성전자", "현대자동차"]),
+                         owner_email="me@b.kr", input_total=2)
+        store.claim_next()
+        assert store.request_pause(j["id"], "me@b.kr")        # 실행 중: 플래그만
+        assert store.get(j["id"])["status"] == J.RUNNING
+        assert run_job(store, j, CFG, collector=MockCollector()) == J.PAUSED
+        assert store.requeue(j["id"], "me@b.kr")
+        assert not store.pause_requested(j["id"])
+        store.claim_next()
+        assert run_job(store, store.get(j["id"]), CFG, collector=MockCollector()) == J.DONE
+        assert store.get(j["id"])["counts"]["success"] == 2
+
+    def test_cancel_wins_over_pause(self, store, tmp_path, monkeypatch):
+        from nice_bizline.app.server.worker import run_job
+        monkeypatch.setenv("MOCK_MODE", "1")
+        j = store.create(name="a.xlsx", input_bytes=self._xlsx(tmp_path, ["삼성전자"]),
+                         owner_email="me@b.kr")
+        store.claim_next()
+        store.request_pause(j["id"], "me@b.kr")
+        store.request_cancel(j["id"], "me@b.kr")
+        assert run_job(store, j, CFG, collector=MockCollector()) == J.CANCELED
+
+    def test_restart_wipes_progress_and_applies_new_options(self, store, tmp_path, monkeypatch):
+        import os
+        from nice_bizline.app.server.worker import run_job
+        monkeypatch.setenv("MOCK_MODE", "1")
+        j = store.create(name="a.xlsx", input_bytes=self._xlsx(tmp_path, ["삼성전자", "현대자동차"]),
+                         owner_email="me@b.kr", options={"narrow_fields": ["주소"]})
+        store.claim_next()
+        assert run_job(store, j, CFG, collector=MockCollector()) == J.DONE
+        ckpt = os.path.splitext(store.input_path(j["id"]))[0] + ".progress.json"
+        assert os.path.exists(store.result_path(j["id"]))
+        assert store.restart(j["id"], "other@b.kr") is False
+        assert store.restart(j["id"], "me@b.kr",
+                             options={"narrow_fields": ["사업자번호"], "match_version": 2})
+        meta = store.get(j["id"])
+        assert meta["status"] == J.PENDING and meta["counts"] == {}
+        assert meta["options"]["narrow_fields"] == ["사업자번호"]
+        assert not os.path.exists(ckpt) and not os.path.exists(store.result_path(j["id"]))
+        store.claim_next()
+        assert run_job(store, store.get(j["id"]), CFG, collector=MockCollector()) == J.DONE
+        log = Path(store.log_path(j["id"])).read_text("utf-8")
+        assert "처음부터 다시 시작" in log and "체크포인트 로드" not in log.split("처음부터 다시 시작")[1]
+
+    def test_cannot_restart_while_running(self, store):
+        j = store.create(name="a.xlsx", input_bytes=b"x", owner_email="me@b.kr")
+        store.claim_next()
+        assert store.restart(j["id"], "me@b.kr") is False

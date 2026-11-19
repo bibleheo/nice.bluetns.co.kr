@@ -29,9 +29,10 @@ RUNNING = "running"
 DONE = "done"
 STOPPED = "stopped"      # 안전 정지(재개 가능 상태로 종료)
 CANCELED = "canceled"
+PAUSED = "paused"        # 사용자가 일시정지 (이어서 재개 가능, 자동 재시작 안 함)
 ERROR = "error"
 
-FINISHED = (DONE, STOPPED, CANCELED, ERROR)
+FINISHED = (DONE, STOPPED, CANCELED, PAUSED, ERROR)
 
 # 안전 정지된 작업을 서버가 스스로 다시 시작하기까지 기다리는 시간(분). 0 이면 끔.
 AUTO_RESUME_MIN = int(os.environ.get("AUTO_RESUME_MIN", "10") or 0)
@@ -227,6 +228,74 @@ class JobStore:
     def cancel_requested(self, job_id: str) -> bool:
         return os.path.exists(self._cancel_path(job_id))
 
+    # ── 일시정지 ──
+    def _pause_path(self, job_id: str) -> str:
+        return os.path.join(self.job_dir(job_id), "pause")
+
+    def request_pause(self, job_id: str, email: str) -> bool:
+        """본인 작업만 일시정지. 대기 중이면 바로, 실행 중이면 지금 회사까지 마치고 멈춘다."""
+        job = self.get(job_id)
+        if not job or job.get("owner_email") != email:
+            return False
+        if job["status"] == PENDING:
+            job["status"] = PAUSED
+            job["finished_at"] = _ts()
+            self.save(job)
+            return True
+        if job["status"] == RUNNING:
+            with open(self._pause_path(job_id), "w") as f:
+                f.write(_ts())
+            return True
+        return False
+
+    def pause_requested(self, job_id: str) -> bool:
+        return os.path.exists(self._pause_path(job_id))
+
+    def stop_requested(self, job_id: str) -> bool:
+        """worker 가 매 회사 전에 확인: 취소 또는 일시정지 요청."""
+        return self.cancel_requested(job_id) or self.pause_requested(job_id)
+
+    def _clear_flags(self, job_id: str) -> None:
+        for p in (self._cancel_path(job_id), self._pause_path(job_id)):
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+
+    def restart(self, job_id: str, email: str, options: dict | None = None) -> bool:
+        """처음부터 다시 시작: 저장된 진행분(체크포인트)과 결과 파일을 지우고 대기열에 넣는다.
+
+        options 를 주면 등록 옵션(대조 기준 등)을 바꿔서 다시 돈다. 입력 엑셀은 그대로 쓴다.
+        실행 중·대기 중인 작업은 먼저 멈춘 뒤에 할 수 있다. 본인 작업만 가능.
+        """
+        job = self.get(job_id)
+        if not job or job.get("owner_email") != email:
+            return False
+        if job["status"] not in FINISHED:
+            return False
+        self._clear_flags(job_id)
+        base, _ = os.path.splitext(self.input_path(job_id))
+        for p in (base + ".progress.json", self.result_path(job_id)):
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+        if options is not None:
+            job["options"] = options
+        job["status"] = PENDING
+        job["started_at"] = None
+        job["finished_at"] = None
+        job["error"] = ""
+        job["counts"] = {}
+        job["progress"] = {"current": 0, "total": 0, "name": ""}
+        job.pop("stop_reason", None)
+        job.pop("auto_resume", None)
+        job.setdefault("restarted", []).append(_ts())
+        self.save(job)
+        self.append_log(job_id, f"{now_seoul().strftime('%m-%d %H:%M:%S')}  [info] 처음부터 다시 시작 "
+                                f"(이전 진행분 삭제)")
+        return True
+
     def requeue(self, job_id: str, email: str) -> bool:
         """끝난(취소·정지·오류) 작업을 멈춘 지점부터 이어서 돌리도록 대기열에 다시 넣는다.
 
@@ -236,12 +305,9 @@ class JobStore:
         job = self.get(job_id)
         if not job or job.get("owner_email") != email:
             return False
-        if job["status"] not in (STOPPED, CANCELED, ERROR):
+        if job["status"] not in (STOPPED, CANCELED, PAUSED, ERROR):
             return False
-        try:
-            os.remove(self._cancel_path(job_id))
-        except OSError:
-            pass
+        self._clear_flags(job_id)
         job["status"] = PENDING
         job["finished_at"] = None
         job["error"] = ""

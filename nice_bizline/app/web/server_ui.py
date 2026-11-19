@@ -42,10 +42,11 @@ STATUS = {
     J.DONE: dict(label="완료", color="green", icon=":material/check_circle:"),
     J.STOPPED: dict(label="안전 정지 · 재개 가능", color="orange", icon=":material/pause_circle:"),
     J.CANCELED: dict(label="취소됨", color="gray", icon=":material/cancel:"),
+    J.PAUSED: dict(label="일시정지 · 재개 가능", color="violet", icon=":material/pause:"),
     J.ERROR: dict(label="오류 · 시작 못 함", color="red", icon=":material/error:"),
 }
 GROUPS = [
-    ("확인이 필요한 작업", (J.STOPPED, J.ERROR)),
+    ("확인이 필요한 작업", (J.STOPPED, J.PAUSED, J.ERROR)),
     ("진행 중", (J.RUNNING, J.PENDING)),
     ("끝난 작업", (J.DONE, J.CANCELED)),
 ]
@@ -331,7 +332,10 @@ def _job_row(store: J.JobStore, jobs: list[dict], job: dict, email: str) -> None
     s, jid = job["status"], job["id"]
     mine = job.get("owner_email") == email
     meta = STATUS.get(s, STATUS[J.ERROR])
-    cancel_req = s == J.RUNNING and store.cancel_requested(jid)
+    cancel_req = ""                       # 멈춤 요청이 걸려 있으면 그 표시 문구
+    if s == J.RUNNING:
+        cancel_req = ("취소 요청됨" if store.cancel_requested(jid)
+                      else "일시정지 요청됨" if store.pause_requested(jid) else "")
     total, done = _total(job), _done(job)
     who = "나" if mine else _md(_user_id(job.get("owner_email", "")))
 
@@ -343,7 +347,7 @@ def _job_row(store: J.JobStore, jobs: list[dict], job: dict, email: str) -> None
         with c1:
             st.badge(label, icon=meta["icon"], color=meta["color"])
             if cancel_req:
-                st.badge("취소 요청됨", color="gray")
+                st.badge(cancel_req, color="gray")
         c2.markdown(f"**{_md(job['name'])}**  \n:gray[{who} · {_registered(job)}]")
 
         with c3:
@@ -353,7 +357,7 @@ def _job_row(store: J.JobStore, jobs: list[dict], job: dict, email: str) -> None
                             text=f"{done:,} / {total:,}" + (f" · 지금 {now_name}" if now_name else ""))
             elif s == J.STOPPED and total:
                 st.progress(min(1.0, done / total), text=f"{done:,} / {total:,} · 처리분 저장됨")
-            elif s == J.CANCELED:
+            elif s in (J.CANCELED, J.PAUSED):
                 st.caption(f"{done:,} / {total:,} · 처리분 저장됨")
             elif s == J.DONE:
                 ok = (job.get("counts") or {}).get("success", 0)
@@ -375,6 +379,8 @@ def _job_row(store: J.JobStore, jobs: list[dict], job: dict, email: str) -> None
                 t = _parse_ts(job.get("finished_at"))
                 stop_at = f"{t:%H:%M} 멈춤  \n" if t else ""
                 st.caption(f"{stop_at}재개 시 {_human(_remaining_sec(job))}")
+            elif s == J.PAUSED:
+                st.caption(f"재개 시 {_human(_remaining_sec(job))}")
             elif s in (J.DONE, J.CANCELED) and _delete_date(job):
                 st.caption(f"{_delete_date(job)} 삭제")
 
@@ -382,7 +388,7 @@ def _job_row(store: J.JobStore, jobs: list[dict], job: dict, email: str) -> None
             if not mine:
                 st.caption(f"{who} 님의 작업")
             elif cancel_req:
-                st.caption("취소 요청됨")
+                st.caption(cancel_req)
             else:
                 _primary_action(store, jobs, job, email, where="row")
 
@@ -417,13 +423,9 @@ def _primary_action(store: J.JobStore, jobs: list[dict], job: dict, email: str, 
     s, jid = job["status"], job["id"]
     k = f"{where}_{jid}"
     if s in (J.PENDING, J.RUNNING):
-        if st.button("취소", key=f"cancel_{k}"):
-            if s == J.PENDING:
-                store.request_cancel(jid, email)       # 대기 중 취소는 바로 '취소됨'
-                st.rerun(scope="fragment")
-            else:
-                confirm_cancel(store, job, email)
-    elif s == J.STOPPED or (s == J.ERROR and _error_kind(job) == "runtime"):
+        if st.button("멈춤", icon=":material/pause:", key=f"cancel_{k}"):
+            confirm_stop(store, job, email)            # 일시정지 / 취소 / 계속 진행
+    elif s in (J.STOPPED, J.PAUSED) or (s == J.ERROR and _error_kind(job) == "runtime"):
         _requeue_button(store, jobs, job, email, key=f"rq_{k}", primary=True)
     elif s == J.ERROR and _error_kind(job) == "input":
         if st.button("새로 등록", icon=":material/upload_file:", type="primary", key=f"new_{k}"):
@@ -478,10 +480,10 @@ def _detail(store: J.JobStore, jobs: list[dict], job: dict, email: str, cancel_r
                 + (f" · 지금 {now_name}" if now_name else "")
                 + f" · {_clock(_remaining_sec(job))} 완료 예정. 창을 닫아도 계속됩니다.")
         if cancel_req:
-            body += "  \n취소 요청됨 · 지금 회사까지 처리하고 멈춥니다."
+            body += f"  \n{cancel_req} · 지금 회사까지 처리하고 멈춥니다."
         st.info(body, icon=":material/sync:")
         if not cancel_req:
-            st.caption("취소하면 지금 회사까지 처리하고 멈춥니다.")
+            st.caption("\"멈춤\"을 누르면 일시정지하거나 취소할 수 있습니다. 지금 회사까지 처리하고 멈춥니다.")
     elif s == J.DONE:
         st.success(f"**끝났습니다. 쓸 수 있는 결과 {c.get('success', 0):,}건.**  \n"
                    f"결과 파일은 {_delete_date(job)}에 자동 삭제됩니다.",
@@ -513,6 +515,13 @@ def _detail(store: J.JobStore, jobs: list[dict], job: dict, email: str, cancel_r
         st.info(f"**직접 취소한 작업입니다.**  \n처리한 {done:,}건은 저장되어 있습니다. "
                 "필요하면 이어서 할 수 있습니다.", icon=":material/cancel:")
         _requeue_button(store, jobs, job, email, key=f"rq_detail_{jid}", primary=False)
+    elif s == J.PAUSED:
+        st.info(f"**일시정지한 작업입니다.**  \n처리한 {done:,}건은 저장되어 있습니다. "
+                f"\"이어서 재개\"를 누르면 {done + 1:,}번째 회사부터 계속합니다. "
+                "서버가 스스로 다시 시작하지는 않습니다.", icon=":material/pause:")
+        if os.path.exists(store.result_path(jid)):
+            _download_button(store, job, email, key=f"dl_detail_{jid}", primary=False,
+                             label="지금까지 결과 받기")
     elif s == J.ERROR:
         kind = _error_kind(job)
         err = job.get("error", "") or ""
@@ -530,6 +539,13 @@ def _detail(store: J.JobStore, jobs: list[dict], job: dict, email: str, cancel_r
 
     if c:
         _counts(job)
+
+    # 처음부터 다시 시작: 멈춰 있거나 끝난 작업만 (입력 파일 문제·서버 설정 오류는 제외)
+    if s in J.FINISHED and not (s == J.ERROR and _error_kind(job) != "runtime"):
+        r1, r2 = st.columns([1.6, 4], vertical_alignment="center")
+        if r1.button("처음부터 다시 시작", icon=":material/restart_alt:", key=f"restart_{jid}"):
+            confirm_restart(store, job, email)
+        r2.caption("진행분을 지우고 1번째 회사부터 다시 합니다. 대조 기준을 바꿀 수 있습니다.")
 
     st.markdown("**진행 기록**")
     st.markdown(_humanize_log(store.tail_log(jid, 400), start=_parse_ts(job.get("created_at"))))
@@ -562,7 +578,8 @@ _LOG_RULES = [
     (re.compile(r"체크포인트 저장 \((\d+)건\)"), lambda m: f"{int(m.group(1)):,}건까지 저장"),
     (re.compile(r"연속 (\d+)건 오류"), lambda m: f"연결 오류 {m.group(1)}번 연속 → 안전 정지"),
     (re.compile(r"재로그인이 계속 실패"), lambda m: "다시 로그인 실패 → 안전 정지"),
-    (re.compile(r"사용자 중단"), lambda m: "취소 요청으로 멈춤"),
+    (re.compile(r"사용자 중단"), lambda m: "요청으로 멈춤 (일시정지·취소)"),
+    (re.compile(r"처음부터 다시 시작"), lambda m: "처음부터 다시 시작 (이전 진행분 삭제)"),
     (re.compile(r"작업 종료 - 상태 done"), lambda m: "작업 완료"),
     (re.compile(r"브라우저 새로 시작"), lambda m: "브라우저 새로 시작"),
 ]
@@ -611,16 +628,49 @@ def _humanize_log(raw: str, limit: int = 6, start: dt.datetime | None = None) ->
     return "\n".join(out) or ":gray[아직 기록이 없습니다.]"
 
 
-@st.dialog("작업을 취소할까요?")
-def confirm_cancel(store: J.JobStore, job: dict, email: str) -> None:
-    st.write("지금 처리 중인 회사까지 마치고 멈춥니다. 처리한 건은 저장되어 나중에 이어서 할 수 있습니다.")
+@st.dialog("작업을 멈출까요?")
+def confirm_stop(store: J.JobStore, job: dict, email: str) -> None:
+    job = store.get(job["id"]) or job            # 목록이 그려진 뒤 바뀐 진행 상황 반영
+    running = job["status"] == J.RUNNING
+    st.write(("지금 처리 중인 회사까지 마치고 멈춥니다. " if running else "")
+             + "처리한 건은 저장되어, 어느 쪽을 골라도 나중에 이어서 할 수 있습니다.")
     st.caption(f"{_md(job['name'])} · {_done(job):,} / {_total(job):,} 처리")
-    a, b = st.columns(2)
-    # 되돌리기 어려운 쪽(취소하기)은 보조, 계속 진행을 주 버튼으로
-    if a.button("취소하기", use_container_width=True, key="dlg_cancel"):
+    st.caption("일시정지: 잠깐 세워 둘 때. 목록의 \"확인이 필요한 작업\"에 남습니다.  \n"
+               "취소하기: 그만둘 때. \"끝난 작업\"으로 옮겨집니다.")
+    a, b, c = st.columns(3)
+    if a.button("일시정지", icon=":material/pause:", use_container_width=True, key="dlg_pause"):
+        store.request_pause(job["id"], email)
+        st.rerun()
+    if b.button("취소하기", use_container_width=True, key="dlg_cancel"):
         store.request_cancel(job["id"], email)
         st.rerun()
-    if b.button("계속 진행", type="primary", use_container_width=True, key="dlg_keep"):
+    # 아무것도 바꾸지 않는 쪽을 주 버튼으로
+    if c.button("계속 진행", type="primary", use_container_width=True, key="dlg_keep"):
+        st.rerun()
+
+
+@st.dialog("처음부터 다시 시작할까요?")
+def confirm_restart(store: J.JobStore, job: dict, email: str) -> None:
+    job = store.get(job["id"]) or job
+    done = _done(job)
+    st.write(f"처리한 {done:,}건과 결과 파일을 지우고 1번째 회사부터 다시 수집합니다. 되돌릴 수 없습니다.")
+    st.caption(f"{_md(job['name'])} · 입력 {_total(job):,}건"
+               + (" · 지금까지의 결과가 필요하면 먼저 받아 두세요." if done else ""))
+    try:
+        companies = read_company_list(store.input_path(job["id"]))
+    except Exception:
+        companies = []
+    old = job.get("options") or {}
+    current = old.get("narrow_fields") if int(old.get("match_version") or 1) >= 2 else None
+    narrow = _narrow_options(companies, key="dlg_match", current=current)
+    a, b = st.columns(2)
+    if a.button("처음부터 다시 시작", icon=":material/restart_alt:", use_container_width=True,
+                key="dlg_restart"):
+        store.restart(job["id"], email, options=dict(old, narrow_fields=list(narrow), match_version=2))
+        st.session_state["_flash"] = ("처음부터 다시 하도록 대기열에 넣었습니다.",
+                                      ":material/restart_alt:")
+        st.rerun()
+    if b.button("돌아가기", type="primary", use_container_width=True, key="dlg_back"):
         st.rerun()
 
 
@@ -773,8 +823,10 @@ def _column_card(columns: list[dict], companies: list[dict]) -> set[str]:
     return used
 
 
-def _narrow_options(companies: list[dict]) -> list[str]:
-    """대조 기준 선택. 돌려주는 목록: 대조에 쓸 열 이름 (빈 목록 = 회사명만)."""
+def _narrow_options(companies: list[dict], key: str = "srv_match",
+                    current: list | None = None) -> list[str]:
+    """대조 기준 선택. 돌려주는 목록: 대조에 쓸 열 이름 (빈 목록 = 회사명만).
+    current: 이미 정해 둔 기준이 있으면 그것을 기본 선택으로 보여 준다."""
     has = {f: any((c.get(f) or "").strip() for c in companies)
            for f in ("대표자명", "사업자번호", "주소")}
     choices: dict[str, list[str]] = {"회사명만": []}
@@ -786,11 +838,18 @@ def _narrow_options(companies: list[dict]) -> list[str]:
         choices["회사명 + 대표자명 + 사업자번호"] = ["대표자명", "사업자번호"]
     default = ("회사명 + 사업자번호" if has["사업자번호"]
                else "회사명 + 대표자명" if has["대표자명"] else "회사명만")
+    addr_default = None
+    if current is not None:
+        want = [f for f in ("대표자명", "사업자번호") if f in current]
+        for label, fields in choices.items():
+            if fields == want:
+                default = label
+        addr_default = "주소" in current
     with st.container(border=True):
         st.markdown("**대조 기준** · 엑셀의 어느 값이 NICE와 같아야 같은 회사로 볼지")
         labels = list(choices)
         pick = st.radio("대조 기준", labels, index=labels.index(default),
-                        label_visibility="collapsed", key="srv_match")
+                        label_visibility="collapsed", key=key)
         narrow = list(choices[pick])
         if "사업자번호" in narrow:
             st.caption("사업자번호가 같은 회사 1곳만 결과에 담습니다. 이름 검색에 안 나오면 사업자번호로 "
@@ -804,8 +863,9 @@ def _narrow_options(companies: list[dict]) -> list[str]:
         if len(choices) > 1:
             st.caption("고른 값이 비어 있는 행은 그 값을 빼고 대조합니다.")
         if has["주소"]:
-            if st.checkbox("주소(지역)가 같은 회사만 남기기", value="사업자번호" not in narrow,
-                           key="srv_narrow_주소",
+            if st.checkbox("주소(지역)가 같은 회사만 남기기",
+                           value=("사업자번호" not in narrow) if addr_default is None else addr_default,
+                           key=f"{key}_주소",
                            help="이름으로 대조할 때 시·군까지 같은 곳만 남깁니다. "
                                 "사업자번호로 확정된 회사에는 적용하지 않습니다."):
                 narrow.append("주소")
