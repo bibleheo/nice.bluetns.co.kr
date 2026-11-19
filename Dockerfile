@@ -15,7 +15,10 @@ WORKDIR /app
 # 의존성 먼저 (레이어 캐시). Chromium + 시스템 라이브러리는 root 로 설치하고
 # 모두가 읽을 수 있게 둔다 (일반 사용자 app 이 실행).
 COPY requirements.txt .
-RUN pip install -r requirements.txt \
+# libatomic1: Playwright 가 함께 가져오는 node 실행 파일이 요구한다 (slim 이미지에는 없음).
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends libatomic1 \
+ && pip install -r requirements.txt \
  && playwright install --with-deps chromium \
  && chmod -R a+rX /ms-playwright \
  && rm -rf /var/lib/apt/lists/*
