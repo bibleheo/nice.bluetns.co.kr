@@ -21,7 +21,7 @@ from pathlib import Path
 import streamlit as st
 
 from nice_bizline.app.core.timeutil import now_seoul
-from nice_bizline.app.excelio.reader import (available_filter_fields, inspect_columns,
+from nice_bizline.app.excelio.reader import (inspect_columns,
                                              read_company_list)
 from nice_bizline.app.server import jobs as J
 
@@ -499,6 +499,13 @@ def _detail(store: J.JobStore, jobs: list[dict], job: dict, email: str, cancel_r
         with b2:
             _download_button(store, job, email, key=f"dl_detail_{jid}", primary=False,
                              label="지금까지 결과 받기")
+        auto, wait = J.auto_resume_state(job)
+        if auto:
+            st.caption(f"서버가 {_human(wait)} 뒤 자동으로 다시 시작합니다." if wait > 60
+                       else "서버가 곧 자동으로 다시 시작합니다.")
+        elif (job.get("auto_resume") or {}).get("no_progress", 0) >= J.AUTO_RESUME_MAX_NO_PROGRESS:
+            st.caption(f"자동 재시작을 {J.AUTO_RESUME_MAX_NO_PROGRESS}번 했지만 한 건도 더 처리하지 못해 "
+                       "자동 재시작을 멈췄습니다. 원문 로그를 확인한 뒤 \"이어서 재개\"를 눌러 주세요.")
         start = _clock(_wait_before(jobs, job), with_day=False)
         b3.caption(f"남은 {max(0, total - done):,}건 · {_human(_remaining_sec(job))} · "
                    f"재개하면 {start} 시작 (등록 순서 기준)")
@@ -557,8 +564,10 @@ _LOG_RULES = [
     (re.compile(r"재로그인이 계속 실패"), lambda m: "다시 로그인 실패 → 안전 정지"),
     (re.compile(r"사용자 중단"), lambda m: "취소 요청으로 멈춤"),
     (re.compile(r"작업 종료 - 상태 done"), lambda m: "작업 완료"),
+    (re.compile(r"브라우저 새로 시작"), lambda m: "브라우저 새로 시작"),
 ]
-_LOG_LINE = re.compile(r"^(\d{2}:\d{2}):\d{2}\s+\[\w+\]\s+(.*)$")
+# 새 로그는 "MM-DD HH:MM:SS", 예전 로그는 "HH:MM:SS" 로 시작한다
+_LOG_LINE = re.compile(r"^(?:(\d{2})-(\d{2}) )?(\d{2}:\d{2}):(\d{2})\s+\[\w+\]\s+(.*)$")
 
 
 def _humanize_log(raw: str, limit: int = 6, start: dt.datetime | None = None) -> str:
@@ -571,9 +580,17 @@ def _humanize_log(raw: str, limit: int = 6, start: dt.datetime | None = None) ->
         m = _LOG_LINE.match(line.strip())
         if not m:
             continue
-        hm, msg = m.groups()
-        hms = line.strip()[:8]
-        if prev and hms < prev:
+        mon, dd, hm, ss, msg = m.groups()
+        hms = f"{hm}:{ss}"
+        if mon:                                   # 날짜가 적힌 줄: 그대로 믿는다
+            try:
+                d = dt.date(day.year, int(mon), int(dd))
+                if d < day - dt.timedelta(days=180):      # 해를 넘긴 경우
+                    d = dt.date(day.year + 1, int(mon), int(dd))
+                day = d
+            except ValueError:
+                pass
+        elif prev and hms < prev:                 # 예전 줄: 시각이 거꾸로 가면 다음 날로 추정
             day += dt.timedelta(days=1)
         prev = hms
         for rx, fmt in _LOG_RULES:
@@ -674,7 +691,9 @@ def _render_new_job(store: J.JobStore, email: str) -> None:
         store.create(
             name=uploaded.name, input_bytes=bytes(uploaded.getbuffer()),
             owner_email=email, input_total=len(companies),
-            options={"narrow_fields": narrow or None, "result_filter": result_filter},
+            # match_version 2: narrow_fields 가 대조 기준 전체(사업자번호 포함)를 뜻한다
+            options={"narrow_fields": list(narrow), "match_version": 2,
+                     "result_filter": result_filter},
         )
         st.session_state["_flash"] = (f"작업을 등록했습니다. {_clock(wait, with_day=False)} 시작합니다.",
                                       ":material/check_circle:")
@@ -755,19 +774,41 @@ def _column_card(columns: list[dict], companies: list[dict]) -> set[str]:
 
 
 def _narrow_options(companies: list[dict]) -> list[str]:
-    narrow: list[str] = []
+    """대조 기준 선택. 돌려주는 목록: 대조에 쓸 열 이름 (빈 목록 = 회사명만)."""
+    has = {f: any((c.get(f) or "").strip() for c in companies)
+           for f in ("대표자명", "사업자번호", "주소")}
+    choices: dict[str, list[str]] = {"회사명만": []}
+    if has["대표자명"]:
+        choices["회사명 + 대표자명"] = ["대표자명"]
+    if has["사업자번호"]:
+        choices["회사명 + 사업자번호"] = ["사업자번호"]
+    if has["대표자명"] and has["사업자번호"]:
+        choices["회사명 + 대표자명 + 사업자번호"] = ["대표자명", "사업자번호"]
+    default = ("회사명 + 사업자번호" if has["사업자번호"]
+               else "회사명 + 대표자명" if has["대표자명"] else "회사명만")
     with st.container(border=True):
-        st.markdown("**이름이 같은 회사 걸러내기**")
-        avail = available_filter_fields(companies)
-        if not avail:
-            st.caption("이 파일에는 대표자명·주소 열이 없어, 이름이 같은 회사는 모두 결과에 담깁니다.")
-            return narrow
-        labels = {"대표자명": "대표자명이 같은 회사만 남기기", "주소": "주소(지역)가 같은 회사만 남기기"}
-        for f in avail:
-            if st.checkbox(labels.get(f, f), value=True, key=f"srv_narrow_{f}"):
-                narrow.append(f)
-        st.caption('예) "(주)동양이엔지"가 사이트에 3곳 있으면, 엑셀 주소와 지역이 같은 곳만 결과에 남깁니다.')
-        st.caption("끄면 이름이 같은 회사를 모두 결과에 담습니다.")
+        st.markdown("**대조 기준** · 엑셀의 어느 값이 NICE와 같아야 같은 회사로 볼지")
+        labels = list(choices)
+        pick = st.radio("대조 기준", labels, index=labels.index(default),
+                        label_visibility="collapsed", key="srv_match")
+        narrow = list(choices[pick])
+        if "사업자번호" in narrow:
+            st.caption("사업자번호가 같은 회사 1곳만 결과에 담습니다. 이름 검색에 안 나오면 사업자번호로 "
+                       "다시 검색합니다. 번호가 같은 회사가 없으면 \"미발견\"으로 남깁니다.")
+            if "대표자명" in narrow:
+                st.caption("사업자번호가 같아도 대표자명이 다르면 \"확인필요\"로 남깁니다.")
+        elif "대표자명" in narrow:
+            st.caption("이름이 같은 회사 중 대표자명이 같은 곳만 결과에 담습니다.")
+        else:
+            st.caption("이름이 같은 회사를 모두 결과에 담습니다.")
+        if len(choices) > 1:
+            st.caption("고른 값이 비어 있는 행은 그 값을 빼고 대조합니다.")
+        if has["주소"]:
+            if st.checkbox("주소(지역)가 같은 회사만 남기기", value="사업자번호" not in narrow,
+                           key="srv_narrow_주소",
+                           help="이름으로 대조할 때 시·군까지 같은 곳만 남깁니다. "
+                                "사업자번호로 확정된 회사에는 적용하지 않습니다."):
+                narrow.append("주소")
     return narrow
 
 
@@ -828,7 +869,8 @@ def _register_summary(jobs: list[dict], n: int, used_cols: list[str], narrow: li
         st.markdown(
             f"회사 · **{n:,}건**  \n"
             f"사용하는 열 · {', '.join(used_cols)}  \n"
-            f"동명 회사 · {_with_ro('·'.join(narrow)) + ' 걸러냄' if narrow else '모두 담음'}  \n"
+            f"대조 기준 · {' + '.join(['회사명'] + [f for f in narrow if f != '주소'])}"
+            f"{' · 주소(지역) 일치' if '주소' in narrow else ''}  \n"
             f"결과 조건 · {cond}")
         _thin_rule()
         start = _clock(wait) + (f" · 앞에 {n_ahead}건" if n_ahead else "")

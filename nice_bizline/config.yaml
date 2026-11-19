@@ -77,6 +77,7 @@ timing:
 
 browser:
   headless: true
+  recycle_every: 200            # 이 건수마다 브라우저를 새로 띄워 메모리 정리 (0이면 끔)
   user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Nice-Bizline-Helper/1.0"
 
 matching:

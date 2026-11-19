@@ -60,7 +60,8 @@ def run_job(store: J.JobStore, job: dict, cfg: dict, collector=None) -> str:
     opts_in = job.get("options") or {}
 
     def say(level: str, msg: str) -> None:
-        store.append_log(job_id, f"{now_seoul().strftime('%H:%M:%S')}  [{level}] {redact(msg)}")
+        # 날짜까지 남긴다: 며칠 걸리는 작업은 시각만으로는 언제 일인지 알 수 없다
+        store.append_log(job_id, f"{now_seoul().strftime('%m-%d %H:%M:%S')}  [{level}] {redact(msg)}")
 
     try:
         companies = read_company_list(inp)
@@ -88,7 +89,7 @@ def run_job(store: J.JobStore, job: dict, cfg: dict, collector=None) -> str:
         finance_years=1, input_path=inp,
         resume=True,                                   # 재배포 후에도 멈춘 지점부터
         checkpoint_every=10,
-        narrow_fields=opts_in.get("narrow_fields"),
+        narrow_fields=_match_fields(opts_in),
         result_filter=opts_in.get("result_filter"),
     )
     state = PipelineState()
@@ -164,6 +165,15 @@ def run_job(store: J.JobStore, job: dict, cfg: dict, collector=None) -> str:
     return status
 
 
+def _match_fields(options: dict):
+    """작업 옵션 → 대조 기준. 예전(대조 기준 옵션이 없던 때) 작업은 사업자번호를
+    항상 자동으로 썼으므로, 그 동작을 그대로 유지한다."""
+    nf = options.get("narrow_fields")
+    if nf is not None and int(options.get("match_version") or 1) < 2:
+        nf = list(nf) + ["사업자번호"]
+    return nf
+
+
 def stop_reason_text(msg: str) -> str:
     """안전 정지 로그를 화면용 이유 문구로 바꾼다. 예: '사이트 연결 오류가 5번 이어져'"""
     import re
@@ -218,6 +228,8 @@ def main() -> None:
 
     last_cleanup = 0.0
     while True:
+        for jid in store.auto_requeue_stopped():
+            log.info("안전 정지된 작업 자동 재시작: %s", jid)
         job = store.claim_next()
         if job is None:
             if time.time() - last_cleanup > 86400:
