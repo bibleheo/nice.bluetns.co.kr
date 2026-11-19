@@ -105,7 +105,7 @@ def run_job(store: J.JobStore, job: dict, cfg: dict, collector=None) -> str:
     last_error_msg = ""
     try:
         for ev in run_pipeline(collector, cfg, opts, state,
-                               stop_check=lambda: store.cancel_requested(job_id)):
+                               stop_check=lambda: store.stop_requested(job_id)):
             t = ev.get("type")
             if t == "log":
                 msg = redact(ev["message"])
@@ -150,6 +150,8 @@ def run_job(store: J.JobStore, job: dict, cfg: dict, collector=None) -> str:
 
     if store.cancel_requested(job_id):
         status = J.CANCELED
+    elif store.pause_requested(job_id):
+        status = J.PAUSED
     elif s.get("stopped"):
         status = J.STOPPED          # 연결 장애 등으로 안전 정지 → 재큐잉 가능
     else:
