@@ -12,7 +12,7 @@ from typing import Iterator
 
 from . import checkpoint
 from .collector import CollectorError, LoginRequired
-from .matcher import select_matches
+from .matcher import _digits, select_matches
 from .normalizer import normalize_amount, normalize_record
 from .session import SessionManager
 from .timeutil import now_seoul
@@ -93,6 +93,8 @@ def run_pipeline(collector, cfg: dict, opts: PipelineOptions,
     consecutive_errors = 0        # 연속 회사 처리 오류 (인터넷 장기 단절 등)
     _MAX_CONSECUTIVE_ERRORS = 5   # 이만큼 연속 오류면 안전 정지(이어서 재개 가능)
     recent_error_items: list[tuple[str, str]] = []   # 연속 오류의 (key, 회사명)
+    recycle_every = int((cfg.get("browser") or {}).get("recycle_every", 0) or 0)
+    collected_this_run = 0
     for i, query in enumerate(opts.companies, 1):
         if stop_check():
             yield _log("warn", "사용자 중단 - 처리분까지 저장합니다.")
@@ -116,6 +118,19 @@ def run_pipeline(collector, cfg: dict, opts: PipelineOptions,
             continue
 
         seen_this_run.add(key)
+        # 오래 돌면 브라우저 메모리가 쌓인다 → 일정 건수마다 새로 띄운다 (로그인은 유지)
+        if recycle_every and collected_this_run and collected_this_run % recycle_every == 0:
+            if _restart_browser(collector, keep_session=True):
+                yield _log("info", f"브라우저 새로 시작 ({collected_this_run}건마다 메모리 정리)")
+                ok = yield from _relogin_with_backoff(collector, opts, session)
+                if not ok:
+                    state.processed_keys.discard(key)
+                    yield _log("error",
+                               "재로그인이 계속 실패해 안전 정지합니다. 처리분은 저장되며, "
+                               "다음 실행 시 자동으로 이어서 진행됩니다.")
+                    stopped = True
+                    break
+        collected_this_run += 1
         if resumed_pending:
             # 재배포/재시작 후 실제로 이어서 처리하는 첫 건 — 재개 검증 근거
             yield _log("info", f"재개 시작: {i}번째 '{name}' 부터 이어서 처리 "
@@ -221,10 +236,35 @@ def _relogin_with_backoff(collector, opts, session):
                 yield _log("info", f"자동 재로그인 성공 ({i}번째 시도)")
             return True
         except Exception as e:
+            reason = _first_line(e)
             yield _log("warn",
-                       f"재로그인 실패({i}/{len(delays)}): {e} → {delay}초 후 자동 재시도")
-            _time.sleep(delay)
+                       f"재로그인 실패({i}/{len(delays)}): {reason} → {delay}초 후 자동 재시도")
+            # 화면이 죽었거나 브라우저가 멈춘 경우 같은 화면으로는 계속 실패한다.
+            # 다음 시도 전에 브라우저를 새로 띄운다.
+            if _restart_browser(collector, keep_session=False):
+                yield _log("info", "브라우저 새로 시작")
+            _time.sleep(delay * _RELOGIN_DELAY_SCALE)
     return False
+
+
+_RELOGIN_DELAY_SCALE = 1.0      # 테스트에서 0 으로 줄인다
+
+
+def _first_line(e) -> str:
+    """오류 문구의 첫 줄만 (Playwright 의 Call log 덩어리는 로그에 남기지 않는다)."""
+    text = str(e).strip().splitlines()
+    return text[0][:200] if text else type(e).__name__
+
+
+def _restart_browser(collector, keep_session: bool) -> bool:
+    fn = getattr(collector, "restart", None)
+    if fn is None:
+        return False
+    try:
+        fn(keep_session=keep_session)
+        return True
+    except Exception:
+        return False
 
 
 def _process_one(collector, opts, state, session, weights, query, name):
@@ -261,6 +301,36 @@ def _process_one(collector, opts, state, session, weights, query, name):
 def _collect(collector, opts, state, weights, query, name):
     candidates = collector.search(name)
     res = select_matches(query, candidates, weights, opts.narrow_fields)
+
+    # 입력에 사업자번호가 있는데 이름 검색 결과에 그 번호가 없으면, 사업자번호로 다시 검색한다.
+    # (흔한 상호는 검색 결과가 많아 대상이 목록에 안 들어오는 경우가 많다)
+    use = opts.narrow_fields
+    q_biz = _digits(query.get("사업자번호"))
+    if q_biz and (use is None or "사업자번호" in use) and res.status not in ("biz", "mismatch"):
+        by_biz = collector.search(q_biz)
+        for c in by_biz:
+            c["_search_term"] = q_biz
+        res2 = select_matches(query, by_biz, weights, use)
+        if res2.status in ("biz", "mismatch"):
+            yield _log("info", f"[{name}] 사업자번호 검색으로 찾음")
+            res, candidates = res2, by_biz
+
+    if res.status == "nobiz":
+        yield _log("warn", f"[{name}] 사업자번호 일치 회사 없음 - 미발견")
+        reason = "입력 사업자번호와 일치하는 회사 없음"
+        state.unfound.append({"회사명": name, "조회상태": "미발견", "사유": reason})
+        state.records.append(_with_input(_blank_row(name, "미발견", reason), query, True))
+        return
+
+    if res.status == "mismatch":
+        c = res.others[0]
+        yield _log("warn", f"[{name}] 사업자번호는 일치하지만 대표자명이 다름 - 확인필요")
+        reason = f"사업자번호 일치, 대표자명 다름 (NICE: {c.get('대표자명', '')})"
+        state.ambiguous.append({"회사명": name, "채택후보": "",
+                                "다른후보들": f"{c.get('회사명', '')}/{c.get('사업자번호', '')}",
+                                "사유": reason})
+        state.records.append(_with_input(_blank_row(name, "확인필요", reason), query, True))
+        return
 
     if res.dropped:
         yield _log("info", f"[{name}] 제외 {res.dropped}건 (펀드/ETF·개인·폐업)")

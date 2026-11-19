@@ -23,6 +23,9 @@ class SelectResult:
       'single'    - 동명 회사 1건
       'multiple'  - 동명 회사 여러 건 → 전부 수집
       'ambiguous' - 이름이 정확히 일치하는 후보가 없어 판단 보류 (검수 필요)
+      'nobiz'     - 대조 기준에 사업자번호가 있는데, 후보 중에 그 번호가 없음
+                    (호출측이 사업자번호로 다시 검색한다)
+      'mismatch'  - 사업자번호는 일치하지만 함께 고른 기준(대표자명)이 다름 (검수 필요)
     picks:   상세를 수집할 대상 리스트 (multiple이면 2건 이상)
     others:  검수용으로 남기는 나머지 후보
     dropped: 사업자번호가 없어 제외된 비기업(펀드/ETF 등) 건수
@@ -98,17 +101,30 @@ def select_matches(query: dict, candidates: list[dict], weights: dict,
     real = [c for c in candidates if _has_biz(c) and not _excluded_type(c)]
     dropped = len(candidates) - len(real)
 
+    # 대조 기준: None 이면 예전 방식(값이 있는 것은 모두 사용, 사업자번호는 자동).
+    # 목록이면 고른 것만 쓴다. 예: ["사업자번호"], ["대표자명", "사업자번호"], [] (회사명만)
+    use = None if narrow_fields is None else set(narrow_fields)
+    q_biz = _digits(query.get("사업자번호"))
+    use_biz = bool(q_biz) and (use is None or "사업자번호" in use)
+    strict_biz = use_biz and use is not None
+
     if not real:
-        return SelectResult("none", [], [], dropped)
+        return SelectResult("nobiz" if strict_biz else "none", [], [], dropped)
 
     # 2) 입력 사업자번호로 확정
-    q_biz = _digits(query.get("사업자번호"))
-    if q_biz:
+    if use_biz:
         exact = [c for c in real if _digits(c.get("사업자번호")) == q_biz]
         if exact:
             others = [c for c in real if c not in exact]
+            # 회사명 + 대표자명 + 사업자번호: 대표자명도 맞아야 확정
+            q_ceo = (query.get("대표자명") or "").strip()
+            if strict_biz and "대표자명" in use and q_ceo and not _ceo_match(q_ceo, exact[0]):
+                return SelectResult("mismatch", [], exact[:1] + others, dropped)
             return SelectResult("biz", exact[:1], others, dropped)
-        # 사업자번호를 줬는데 결과에 없음 → 이름으로 재판단 (아래로 진행)
+        if strict_biz:
+            # 사업자번호로 대조하기로 했는데 그 번호가 없다 → 이름만으로 다른 회사를 채택하지 않는다
+            return SelectResult("nobiz", [], real, dropped)
+        # (예전 방식) 사업자번호를 줬는데 결과에 없음 → 이름으로 재판단 (아래로 진행)
 
     # 3) 상호 정확 일치로 동명 회사 채택
     qn = _norm_company(query.get("회사명"))
@@ -175,6 +191,12 @@ def region_match(query_addr: str | None, cand_addr: str | None) -> bool:
     if qp and cp:
         return qp == cp
     return False
+
+
+def _ceo_match(q_ceo: str, cand: dict) -> bool:
+    """대표자명 일치. 공동대표('유홍철/지명하') 표기 대비 서로 포함이면 일치로 본다."""
+    cc = (cand.get("대표자명") or "").strip()
+    return bool(cc) and (q_ceo in cc or cc in q_ceo)
 
 
 def _narrow_by_query(query: dict, cands: list[dict],

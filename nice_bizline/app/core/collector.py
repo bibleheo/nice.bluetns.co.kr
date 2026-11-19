@@ -51,14 +51,51 @@ class NiceBizlineCollector:
 
         self._cfg = config
         self._pw = sync_playwright().start()
-        browser_cfg = config.get("browser", {})
+        self._start_browser()
+
+    def _start_browser(self, storage_state=None) -> None:
+        browser_cfg = self._cfg.get("browser", {})
         self._browser = self._pw.chromium.launch(headless=browser_cfg.get("headless", True))
         ctx_kwargs = {}
         if ua := browser_cfg.get("user_agent"):
             ctx_kwargs["user_agent"] = ua
+        if storage_state:
+            ctx_kwargs["storage_state"] = storage_state
         self._context = self._browser.new_context(**ctx_kwargs)
         self._page = self._context.new_page()
-        self._page.set_default_timeout(int(config["timing"].get("page_timeout_sec", 30)) * 1000)
+        self._page.set_default_timeout(
+            int(self._cfg["timing"].get("page_timeout_sec", 30)) * 1000)
+
+    def restart(self, keep_session: bool = True) -> None:
+        """브라우저를 통째로 새로 띄운다.
+
+        - 화면이 죽었을 때(Page crashed) 같은 화면으로는 몇 번을 시도해도 실패하므로 새로 띄운다.
+        - 오래 돌면 메모리가 쌓이므로 주기적으로도 새로 띄운다.
+        keep_session 이면 로그인 쿠키를 넘겨받아 다시 로그인하지 않아도 되게 한다
+        (죽은 브라우저에서는 못 꺼낼 수 있고, 그러면 호출측이 login() 으로 다시 로그인한다).
+        """
+        state = None
+        if keep_session:
+            try:
+                state = self._context.storage_state()
+            except Exception:
+                state = None
+        for closer in (lambda: self._context.close(), lambda: self._browser.close()):
+            try:
+                closer()
+            except Exception:
+                pass
+        try:
+            self._start_browser(storage_state=state)
+        except Exception:
+            # Playwright 드라이버 자체가 죽은 경우: 드라이버부터 다시
+            from playwright.sync_api import sync_playwright
+            try:
+                self._pw.stop()
+            except Exception:
+                pass
+            self._pw = sync_playwright().start()
+            self._start_browser(storage_state=state)
 
     def close(self) -> None:
         try:
@@ -78,8 +115,13 @@ class NiceBizlineCollector:
         for _ in range(2):
             if not self._visible(sel["id_input"], timeout=4000):
                 break
-            self._page.fill(sel["id_input"], user_id)
-            self._page.fill(sel["pw_input"], password)
+            try:
+                self._page.fill(sel["id_input"], user_id)
+                self._page.fill(sel["pw_input"], password)
+            except Exception:
+                # Playwright 오류 문구에는 입력하려던 값(계정·비밀번호)이 들어간다.
+                # 원래 예외를 연결하지 않고(from None) 값 없는 오류로 바꿔 올린다.
+                raise CollectorError("로그인 입력란을 채우지 못했습니다 (화면 구조 변경 가능)") from None
             self._page.click(sel["submit_btn"])
             self._dismiss_concurrent_popup()
             if self._visible(sel["logged_in_marker"], timeout=10000):
@@ -299,7 +341,8 @@ class NiceBizlineCollector:
 
         # 상세 진입 전 항상 새로 검색해 깨끗한 결과 목록에서 대상 행을 찾는다.
         # (직전에 상세를 본 뒤 목록이 사라지거나 어긋나 '행 못 찾음'이 나던 문제 방지)
-        self._open_search(candidate.get("회사명") or "")
+        # 사업자번호 검색으로 찾은 후보는 같은 검색어로 다시 찾는다 (흔한 상호는 이름 검색에 안 잡힘)
+        self._open_search(candidate.get("_search_term") or candidate.get("회사명") or "")
         # 결과 표가 비동기로 채워질 시간을 잠깐 준다(클릭 레이스 방지)
         self._page.wait_for_timeout(800)
 
@@ -356,6 +399,14 @@ class NiceBizlineCollector:
                 self._page = pages[-1]
                 self._page.set_default_timeout(
                     int(self._cfg["timing"].get("page_timeout_sec", 30)) * 1000)
+                # 쓰고 난 탭은 닫는다. 안 닫으면 회사마다 탭이 하나씩 쌓여
+                # 수백 건 뒤 메모리 한도에 닿아 브라우저가 죽는다.
+                for old in pages:
+                    if old is not self._page:
+                        try:
+                            old.close()
+                        except Exception:
+                            pass
         except Exception:
             pass
 
@@ -690,6 +741,12 @@ class MockCollector:
 
     def search(self, company_name: str) -> list[dict]:
         time.sleep(0.1)
+        if company_name.isdigit():                      # 사업자번호 검색
+            for key, rows in _MOCK_DB.items():
+                if any(r.get("사업자번호") == company_name for r in rows):
+                    return [{k: v for k, v in r.items() if not k.startswith("_")}
+                            | {"_detail_link": key} for r in rows]
+            return []
         for key, rows in _MOCK_DB.items():
             if key in company_name or company_name in key:
                 return [{k: v for k, v in r.items() if not k.startswith("_")} | {"_detail_link": key}
@@ -714,6 +771,9 @@ class MockCollector:
 
     def is_login_page(self) -> bool:
         return not self._logged_in
+
+    def restart(self, keep_session: bool = True) -> None:
+        self.restarts = getattr(self, "restarts", 0) + 1
 
     def close(self) -> None:
         self._logged_in = False

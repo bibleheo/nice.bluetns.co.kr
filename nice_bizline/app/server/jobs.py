@@ -33,6 +33,32 @@ ERROR = "error"
 
 FINISHED = (DONE, STOPPED, CANCELED, ERROR)
 
+# 안전 정지된 작업을 서버가 스스로 다시 시작하기까지 기다리는 시간(분). 0 이면 끔.
+AUTO_RESUME_MIN = int(os.environ.get("AUTO_RESUME_MIN", "10") or 0)
+# 자동 재시작을 이만큼 연달아 해도 한 건도 더 처리하지 못하면 그만둔다 (사람이 봐야 하는 장애).
+AUTO_RESUME_MAX_NO_PROGRESS = 3
+
+
+def _processed(job: dict) -> int:
+    return int((job.get("counts") or {}).get("processed")
+               or (job.get("progress") or {}).get("current") or 0)
+
+
+def auto_resume_state(job: dict) -> tuple[bool, int]:
+    """(자동 재시작 대상인가, 남은 초). 화면 안내와 worker 가 같은 규칙을 쓴다."""
+    if job.get("status") != STOPPED or AUTO_RESUME_MIN <= 0:
+        return False, 0
+    ar = job.get("auto_resume") or {}
+    if int(ar.get("no_progress") or 0) >= AUTO_RESUME_MAX_NO_PROGRESS:
+        return False, 0
+    import datetime as _dt
+    try:
+        fin = _dt.datetime.strptime(job.get("finished_at") or "", "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return True, 0
+    elapsed = (now_seoul().replace(tzinfo=None) - fin).total_seconds()
+    return True, max(0, int(AUTO_RESUME_MIN * 60 - elapsed))
+
 
 def _ts() -> str:
     return now_seoul().strftime("%Y-%m-%d %H:%M:%S")
@@ -220,9 +246,42 @@ class JobStore:
         job["finished_at"] = None
         job["error"] = ""
         job.pop("stop_reason", None)
+        if job.get("auto_resume"):
+            job["auto_resume"]["no_progress"] = 0     # 사람이 직접 재개 → 자동 재시작 다시 허용
         job.setdefault("requeued", []).append(_ts())
         self.save(job)
         return True
+
+    def auto_requeue_stopped(self) -> list[str]:
+        """안전 정지된 작업을 AUTO_RESUME_MIN 분 뒤 대기열에 다시 넣는다 (밤새 멈춰 있지 않도록).
+
+        취소·오류는 건드리지 않는다. 연달아 재시작해도 진전이 없으면 그만둔다.
+        """
+        out = []
+        for job in self.list():
+            ok, wait = auto_resume_state(job)
+            if not ok or wait > 0:
+                continue
+            ar = dict(job.get("auto_resume") or {})
+            done = _processed(job)
+            if ar.get("count") and done <= int(ar.get("last_processed") or 0):
+                ar["no_progress"] = int(ar.get("no_progress") or 0) + 1
+            else:
+                ar["no_progress"] = 0
+            if ar["no_progress"] >= AUTO_RESUME_MAX_NO_PROGRESS:
+                job["auto_resume"] = ar          # 화면이 '자동 재시작 중단'을 알 수 있게 기록만
+                self.save(job)
+                continue
+            ar["count"] = int(ar.get("count") or 0) + 1
+            ar["last_processed"] = done
+            ar["last_at"] = _ts()
+            job["auto_resume"] = ar
+            job["status"] = PENDING
+            job["finished_at"] = None
+            job.pop("stop_reason", None)
+            self.save(job)
+            out.append(job["id"])
+        return out
 
     # ── 다운로드 기록 ──
     def record_download(self, job_id: str, email: str) -> None:
